@@ -323,11 +323,13 @@ export default function Home() {
                     <span className="text-success">READY</span>
                     <span className="text-muted">main</span>
                   </div>
+                  
                   <div className="flex items-center justify-between rounded-md border border-border bg-panelAlt px-3 py-2">
                     <span>72/100</span>
                     <span className="text-danger">BLOCKED</span>
                     <span className="text-muted">feature/auth</span>
                   </div>
+
                   <div className="flex items-center justify-between rounded-md border border-border bg-panelAlt px-3 py-2">
                     <span>86/100</span>
                     <span className="text-warning">WARNING</span>
@@ -348,12 +350,14 @@ export default function Home() {
                 <span className="text-text">Score &gt;= 80</span>
                 <span className="text-success">PASS ✓</span>
               </div>
+
               <div className="flex items-center gap-3">
                 <div className="h-2.5 w-2.5 rounded-full bg-danger" />
                 <span className="text-text">Score &lt; 80</span>
                 <span className="text-danger">BLOCK DEPLOYMENT</span>
               </div>
             </div>
+
             <div className="terminal mt-6 rounded-lg border border-border bg-panelAlt p-4 text-xs text-muted">
               <p>name: deploy</p>
               <p>on: [push]</p>
