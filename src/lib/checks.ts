@@ -102,6 +102,162 @@ function fileExists(rel: string): boolean {
   return fs.existsSync(path.join(ROOT, rel));
 }
 
+// ---------------------------------------------------------------------------
+// Isolated temporary workspace for executable checks (build / test / audit).
+//
+// The real repository is only ever *inspected* (git, secrets, .env.example,
+// Dockerfile, package metadata). Build/test execution happens in a scratch
+// directory that reuses node_modules through a Windows directory junction, so
+// npm run build generates its own .next there and NEVER touches the live
+// serving application's ROOT/.next.
+// ---------------------------------------------------------------------------
+
+// Minimal set of files needed to run npm audit / npm run build / npm test in
+// the isolated workspace. src/ is copied in full (the app code to compile).
+const WORKSPACE_CONFIG_FILES: string[] = [
+  'package.json',
+  'package-lock.json',
+  'next.config.mjs',
+  'next-env.d.ts',
+  'tsconfig.json',
+  'tailwind.config.ts',
+  'postcss.config.js',
+  '.eslintrc.json',
+];
+
+interface TempWorkspace {
+  dir: string;
+}
+
+function copyTree(src: string, dest: string, copyNominee: (rel: string) => boolean): void {
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const rel = entry.name;
+    if (entry.name.startsWith('.env')) continue; // never copy any environment file/secret
+    if (rel === 'node_modules' || rel === '.next' || rel === '.data' || rel === '.git') continue;
+    const from = path.join(src, rel);
+    if (entry.isDirectory()) {
+      if (copyNominee(rel)) {
+        const to = path.join(dest, rel);
+        fs.mkdirSync(to, { recursive: true });
+        copyTree(from, to, copyNominee);
+      }
+    } else {
+      if (copyNominee(rel)) {
+        fs.copyFileSync(from, path.join(dest, rel));
+      }
+    }
+  }
+}
+
+function createTempWorkspace(): TempWorkspace {
+  // Workspace lives under the gitignored runtime area (never served, never
+  // public). Randomized name avoids collisions.
+  const base = path.join(ROOT, '.data', 'tmp');
+  fs.mkdirSync(base, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(base, 'scan-'));
+
+  // Copy the minimal source/config set needed to execute the build/tests.
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+  for (const file of WORKSPACE_CONFIG_FILES) {
+    if (fs.existsSync(path.join(ROOT, file))) {
+      fs.copyFileSync(path.join(ROOT, file), path.join(dir, file));
+    }
+  }
+  const srcRoot = path.join(ROOT, 'src');
+  if (fs.existsSync(srcRoot)) {
+    copyTree(srcRoot, path.join(dir, 'src'), () => true);
+  }
+
+  // Reuse the installed dependencies through a Windows directory junction.
+  // No copy, no reinstall; the build resolves modules through the junction.
+  const realNodeModules = path.join(ROOT, 'node_modules');
+  const wsNodeModules = path.join(dir, 'node_modules');
+  if (fs.existsSync(realNodeModules)) {
+    try {
+      // 'junction' works on Windows without elevated privileges and maps the
+      // whole directory tree.
+      fs.symlinkSync(realNodeModules, wsNodeModules, 'junction');
+    } catch {
+      // Re-throw: do NOT silently fall back to copying or re-installing or to
+      // a weaker isolation strategy. Report so the caller can surface it.
+      throw new Error(
+        `Failed to create node_modules junction for the isolated scan workspace (${realNodeModules}). ` +
+          'Cannot run the build/test checks without it.',
+      );
+    }
+  }
+
+  return { dir };
+}
+
+function destroyTempWorkspace(ws: TempWorkspace | null): void {
+  if (!ws) return;
+  try {
+    const base = path.dirname(ws.dir);
+    // rmSync removes the junction target contents; ensure we only ever target
+    // a scan-* directory under the runtime tmp area (never ROOT).
+    if (path.basename(ws.dir).startsWith('scan-') && base.endsWith(path.join('.data', 'tmp'))) {
+      fs.rmSync(ws.dir, { recursive: true, force: true });
+    }
+  } catch {
+    // Best-effort cleanup; a leftover randomized, secret-free dir under
+    // gitignored .data/tmp is benign and will be reclaimed by the OS.
+  }
+}
+
+async function withTempWorkspace<T>(fn: (ws: TempWorkspace) => Promise<T>): Promise<T> {
+  const ws = createTempWorkspace();
+  try {
+    return await fn(ws);
+  } finally {
+    destroyTempWorkspace(ws);
+  }
+}
+
+// Same Windows-safe spawn planning as planSpawn(), but executed in a specific
+// working directory so the real repository directory is never the cwd for
+// build/test/audit commands (their .next lands in the isolated workspace).
+function runCommandIn(
+  args: string[],
+  cwd: string,
+  opts: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<RunResult> {
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  return new Promise((resolve) => {
+    const planned = planSpawn(args);
+    execFile(
+      planned.file,
+      planned.cmdArgs,
+      {
+        cwd,
+        timeout: timeoutMs,
+        maxBuffer: 10 * 1024 * 1024,
+        windowsHide: true,
+        ...(opts.signal ? { signal: opts.signal } : {}),
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          const err = error as NodeJS.ErrnoException & {
+            code?: number | string;
+            signal?: string | null;
+            killed?: boolean;
+          };
+          resolve({
+            stdout: stdout ?? '',
+            stderr: stderr ?? '',
+            exitCode: typeof err.code === 'number' ? err.code : null,
+            signal: err.signal ?? null,
+            timedOut: err.killed === true || opts.signal?.aborted === true,
+          });
+          return;
+        }
+        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', exitCode: 0, signal: null, timedOut: false });
+      },
+    );
+  });
+}
+
 function isCleanGitStatus(stdout: string): boolean {
   const lines = stdout.split(/\r?\n/).filter((l) => l.trim().length > 0 && !l.trim().startsWith('?? '));
   const untracked = stdout.split(/\r?\n/).filter((l) => l.trim().startsWith('?? '));
@@ -311,106 +467,117 @@ async function scanBody(signal: AbortSignal): Promise<ScanResult> {
     },
   ];
 
-  // --- Dependencies ---
-  const auditIssues: Issue[] = [];
-  let depSummary = 'not run';
-  let depStatus: CheckSummary['status'] = 'pass';
-  if (fileExists('package-lock.json') || fileExists('package.json')) {
-    const auditRes = await runCommand(['npm', 'audit', '--audit-level=high', '--json'], { timeoutMs: 60_000, signal });
-    if (auditRes.exitCode === 0) {
-      depStatus = 'pass';
-      depSummary = 'No high/critical vulnerabilities found';
-    } else {
-      depStatus = 'warning';
-      depSummary = 'High or critical vulnerabilities reported by npm audit';
-      auditIssues.push({
-        severity: 'warning',
-        title: 'Dependency vulnerabilities',
-        file: 'package.json',
-        line: null,
-        message: 'npm audit reported issues at or above the high severity threshold.',
-        fix: 'Run `npm audit fix` and review the report.',
-      });
-    }
-  } else {
-    depSummary = 'No package manifest detected';
-  }
+  // --- Dependencies / Build / Tests ---
+  // These run in an isolated temporary workspace (own .next, node_modules
+  // joined), so they never write into the live serving project's ROOT/.next.
+  // Inspection logic (manifest presence, test-script presence) still reads the
+  // real repository; only command *execution* happens in the workspace.
+  const { auditIssues, depSummary, depStatus, buildIssues, buildStatus, buildSummary, testIssues, testStatus, testSummary } =
+    await withTempWorkspace(async (ws) => {
+      const auditIssues: Issue[] = [];
+      let depSummary = 'not run';
+      let depStatus: CheckSummary['status'] = 'pass';
+      if (fileExists('package-lock.json') || fileExists('package.json')) {
+        const auditRes = await runCommandIn(['npm', 'audit', '--audit-level=high', '--json'], ws.dir, {
+          timeoutMs: 60_000,
+          signal,
+        });
+        if (auditRes.exitCode === 0) {
+          depStatus = 'pass';
+          depSummary = 'No high/critical vulnerabilities found';
+        } else {
+          depStatus = 'warning';
+          depSummary = 'High or critical vulnerabilities reported by npm audit';
+          auditIssues.push({
+            severity: 'warning',
+            title: 'Dependency vulnerabilities',
+            file: 'package.json',
+            line: null,
+            message: 'npm audit reported issues at or above the high severity threshold.',
+            fix: 'Run `npm audit fix` and review the report.',
+          });
+        }
+      } else {
+        depSummary = 'No package manifest detected';
+      }
+
+      const buildIssues: Issue[] = [];
+      let buildStatus: CheckSummary['status'] = 'pass';
+      let buildSummary = 'Build valid';
+      if (fileExists('package.json')) {
+        const buildRes = await runCommandIn(['npm', 'run', 'build'], ws.dir, { timeoutMs: 180_000, signal });
+        if (buildRes.exitCode === 0) {
+          buildStatus = 'pass';
+          buildSummary = buildRes.timedOut ? 'Build timed out' : 'Build completed successfully';
+          if (buildRes.timedOut) buildStatus = 'warning';
+        } else {
+          buildStatus = 'critical';
+          buildSummary = `Build failed (exit ${buildRes.exitCode ?? 'n/a'})`;
+          const lastLines = (buildRes.stderr || buildRes.stdout || '')
+            .split(/\r?\n/)
+            .filter((l) => l.trim())
+            .slice(-5)
+            .join(' ');
+          buildIssues.push({
+            severity: 'critical',
+            title: 'Production build failed',
+            file: null,
+            line: null,
+            message: `npm run build did not complete successfully. ${lastLines}`,
+            fix: 'Fix the build errors reported by the bundler/compiler.',
+          });
+        }
+      } else {
+        buildStatus = 'warning';
+        buildSummary = 'No package.json to build';
+      }
+
+      const testIssues: Issue[] = [];
+      let testStatus: CheckSummary['status'] = 'pass';
+      let testSummary = 'No test suite configured';
+      if (packageJsonTestScript()) {
+        const testRes = await runCommandIn(['npm', 'test'], ws.dir, { timeoutMs: 180_000, signal });
+        if (testRes.exitCode === 0) {
+          testStatus = 'pass';
+          testSummary = 'Tests passed';
+        } else {
+          testStatus = 'critical';
+          testSummary = `Tests failed (exit ${testRes.exitCode ?? 'n/a'})`;
+          const lastLines = (testRes.stderr || testRes.stdout || '')
+            .split(/\r?\n/)
+            .filter((l) => l.trim())
+            .slice(-5)
+            .join(' ');
+          testIssues.push({
+            severity: 'critical',
+            title: 'Test suite failed',
+            file: null,
+            line: null,
+            message: `npm test did not pass. ${lastLines}`,
+            fix: 'Fix the failing tests before shipping.',
+          });
+        }
+      } else {
+        testStatus = 'warning';
+        testIssues.push({
+          severity: 'warning',
+          title: 'No test script configured',
+          file: 'package.json',
+          line: null,
+          message: 'There is no "test" script in package.json, so tests could not be run.',
+          fix: 'Add a test runner and a "test" script to package.json.',
+        });
+      }
+
+      return { auditIssues, depSummary, depStatus, buildIssues, buildStatus, buildSummary, testIssues, testStatus, testSummary };
+    });
+
   const depChecks: CheckSummary[] = [
     { slug: 'audit', name: 'npm audit', status: depStatus, detail: depSummary },
   ];
-
-  // --- Build ---
-  const buildIssues: Issue[] = [];
-  let buildStatus: CheckSummary['status'] = 'pass';
-  let buildSummary = 'Build valid';
-  if (fileExists('package.json')) {
-    const buildRes = await runCommand(['npm', 'run', 'build'], { timeoutMs: 180_000, signal });
-    if (buildRes.exitCode === 0) {
-      buildStatus = 'pass';
-      buildSummary = buildRes.timedOut ? 'Build timed out' : 'Build completed successfully';
-      if (buildRes.timedOut) buildStatus = 'warning';
-    } else {
-      buildStatus = 'critical';
-      buildSummary = `Build failed (exit ${buildRes.exitCode ?? 'n/a'})`;
-      const lastLines = (buildRes.stderr || buildRes.stdout || '')
-        .split(/\r?\n/)
-        .filter((l) => l.trim())
-        .slice(-5)
-        .join(' ');
-      buildIssues.push({
-        severity: 'critical',
-        title: 'Production build failed',
-        file: null,
-        line: null,
-        message: `npm run build did not complete successfully. ${lastLines}`,
-        fix: 'Fix the build errors reported by the bundler/compiler.',
-      });
-    }
-  } else {
-    buildStatus = 'warning';
-    buildSummary = 'No package.json to build';
-  }
   const buildChecks: CheckSummary[] = [
     { slug: 'build', name: 'npm run build', status: buildStatus, detail: buildSummary },
   ];
-
-  // --- Tests ---
-  const testIssues: Issue[] = [];
-  let testStatus: CheckSummary['status'] = 'pass';
-  let testSummary = 'No test suite configured';
-  if (packageJsonTestScript()) {
-    const testRes = await runCommand(['npm', 'test'], { timeoutMs: 180_000, signal });
-    if (testRes.exitCode === 0) {
-      testStatus = 'pass';
-      testSummary = 'Tests passed';
-    } else {
-      testStatus = 'critical';
-      testSummary = `Tests failed (exit ${testRes.exitCode ?? 'n/a'})`;
-      const lastLines = (testRes.stderr || testRes.stdout || '')
-        .split(/\r?\n/)
-        .filter((l) => l.trim())
-        .slice(-5)
-        .join(' ');
-      testIssues.push({
-        severity: 'critical',
-        title: 'Test suite failed',
-        file: null,
-        line: null,
-        message: `npm test did not pass. ${lastLines}`,
-        fix: 'Fix the failing tests before shipping.',
-      });
-    }
-  } else {
-    testStatus = 'warning';
-    testIssues.push({
-      severity: 'warning',
-      title: 'No test script configured',
-      file: 'package.json',
-      line: null,
-      message: 'There is no "test" script in package.json, so tests could not be run.',
-      fix: 'Add a test runner and a "test" script to package.json.',
-    });
-  }
   const testChecks: CheckSummary[] = [
     { slug: 'tests', name: 'Test suite', status: testStatus, detail: testSummary },
   ];
