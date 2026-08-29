@@ -1,0 +1,131 @@
+import crypto from 'node:crypto';
+import { cookies } from 'next/headers';
+import { ApiError } from './http';
+import { store, SESSION_TTL_MS } from './store';
+
+export const SESSION_COOKIE = 'sc_session';
+
+const ENV_PASSWORD = process.env.SHIPCHECK_PASSWORD;
+
+// Keep a module-level in-memory pool of active sessions (fast path) in addition
+// to persistence, so a server restart does not log everyone out unnecessarily.
+const memorySessions = new Map<string, { createdAt: number }>();
+
+function timingSafeEqualHex(a: string, b: string): boolean {
+  const ah = Buffer.from(a, 'hex');
+  const bh = Buffer.from(b, 'hex');
+  if (ah.length !== bh.length) return false;
+  return crypto.timingSafeEqual(ah, bh);
+}
+
+function hashPassword(password: string, salt: Buffer): Buffer {
+  return crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
+}
+
+// Store the scrypt hash + salt so we never keep the plaintext password around,
+// while remaining able to verify future login attempts across restarts.
+function getOrCreateStoredHash(): { salt: Buffer; hash: Buffer } {
+  const existing = store.getAuthSecret();
+  if (existing) {
+    return {
+      salt: Buffer.from(existing.salt, 'hex'),
+      hash: Buffer.from(existing.hash, 'hex'),
+    };
+  }
+  const salt = crypto.randomBytes(16);
+  const hash = hashPassword(ENV_PASSWORD ?? '', salt);
+  store.setAuthSecret({
+    salt: salt.toString('hex'),
+    hash: hash.toString('hex'),
+  });
+  return { salt, hash };
+}
+
+export function isPasswordConfigured(): boolean {
+  return typeof ENV_PASSWORD === 'string' && ENV_PASSWORD.length > 0;
+}
+
+export function verifyPassword(candidate: string): boolean {
+  if (!isPasswordConfigured()) {
+    throw new ApiError('INTERNAL', 'SHIPCHECK_PASSWORD is not configured', 500);
+  }
+  const { salt, hash } = getOrCreateStoredHash();
+  const candidateHash = hashPassword(candidate, salt);
+  return timingSafeEqualHex(candidateHash.toString('hex'), hash.toString('hex'));
+}
+
+function createSessionToken(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+export async function createSession(): Promise<string> {
+  const token = createSessionToken();
+  const createdAt = Date.now();
+  memorySessions.set(token, { createdAt });
+  await store.setSession(token, { createdAt });
+  return token;
+}
+
+export async function destroySession(token: string): Promise<void> {
+  memorySessions.delete(token);
+  await store.deleteSession(token);
+}
+
+export function sessionIsValid(token: string | undefined): boolean {
+  if (!token) return false;
+  const mem = memorySessions.get(token);
+  if (!mem) {
+    // Fall back to the persisted store (e.g. after a server restart).
+    const persisted = store.getSession(token);
+    if (!persisted) return false;
+    if (Date.now() - persisted.createdAt > SESSION_TTL_MS) {
+      void store.deleteSession(token);
+      return false;
+    }
+    memorySessions.set(token, { createdAt: persisted.createdAt });
+    return true;
+  }
+  if (Date.now() - mem.createdAt > SESSION_TTL_MS) {
+    memorySessions.delete(token);
+    void store.deleteSession(token);
+    return false;
+  }
+  return true;
+}
+
+export function getSessionToken(): string | undefined {
+  const store2 = cookies();
+  return store2.get(SESSION_COOKIE)?.value;
+}
+
+export function requireAuth(): string {
+  const token = getSessionToken();
+  if (!token || !sessionIsValid(token)) {
+    throw new ApiError('UNAUTHORIZED', 'Authentication required', 401);
+  }
+  return token;
+}
+
+const SESSION_COOKIE_OPTIONS: Record<string, string> = {
+  httpOnly: 'true',
+  sameSite: 'strict',
+  path: '/',
+};
+
+// Compute Secure flag dynamically: set in production builds, off in local http dev.
+function sessionCookieOpts(maxAgeSecs?: number): string {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  const opts = Object.entries(SESSION_COOKIE_OPTIONS)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('; ');
+  const age = maxAgeSecs !== undefined ? `${opts}; Max-Age=${maxAgeSecs}` : opts;
+  return `${age}${secure}`;
+}
+
+export function sessionCookieValue(token: string): string {
+  return `${SESSION_COOKIE}=${token}; ${sessionCookieOpts(SESSION_TTL_MS / 1000)}`;
+}
+
+export function expireSessionCookie(): string {
+  return `${SESSION_COOKIE}=; ${sessionCookieOpts(0)}; Max-Age=0`;
+}

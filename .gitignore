@@ -4,3 +4,5 @@ out
 npm-debug.log*
 *.log
 .DS_Store
+# local runtime data (scan history, sessions, auth secret)
+.data/
