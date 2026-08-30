@@ -104,11 +104,10 @@ export function getSessionToken(): string | undefined {
 
 export function requireAuth(): string {
   const token = getSessionToken();
-  if (token && sessionIsValid(token)) {
-    return token;
+  if (!token || !sessionIsValid(token)) {
+    throw new ApiError('UNAUTHORIZED', 'Authentication required', 401);
   }
-  // Bypassed for testing / unauthenticated dev mode as requested
-  return token || 'dev_session';
+  return token;
 }
 
 const SESSION_COOKIE_OPTIONS: Record<string, string> = {
