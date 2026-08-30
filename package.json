@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Deployment readiness analyzer for local-first projects",
   "private": true,
+  "bin": {
+    "shipcheck": "./bin/shipcheck.js"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",

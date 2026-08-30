@@ -25,8 +25,24 @@ export interface CheckSummary {
   detail: string;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScanComparison {
+  previousScore: number | null;
+  scoreDelta: number;
+  resolvedIssues: Issue[];
+  introducedIssues: Issue[];
+}
+
 export interface ScanResult {
   id: string;
+  projectId?: string;
+  comparison?: ScanComparison;
   createdAt: string; // ISO timestamp, UTC
   score: number; // 0-100
   status: 'READY' | 'BLOCKED' | 'WARNING';

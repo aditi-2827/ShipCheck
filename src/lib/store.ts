@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ApiError } from './http';
 
+import type { Project, ScanResult } from './types';
+
 export interface AuthSecretRecord {
   salt: string;
   hash: string;
@@ -21,6 +23,7 @@ const DATA_DIR = path.join(process.cwd(), '.data');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const SECRET_FILE = path.join(DATA_DIR, 'auth-secret.json');
 const SESSION_FILE = path.join(DATA_DIR, 'sessions.json');
+const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json');
 
 function ensureDir(): void {
   if (!fs.existsSync(DATA_DIR)) {
@@ -71,9 +74,14 @@ function writeJsonFile(file: string, value: unknown): void {
 
 // --- History ---
 
-export function getHistory<T>(): T[] {
+export function getHistory<T = ScanResult>(): T[] {
   const all = readJsonStrict<{ history?: T[] }>(HISTORY_FILE, { history: [] });
   return Array.isArray(all.history) ? all.history : [];
+}
+
+export function getHistoryByProject(projectId: string): ScanResult[] {
+  const all = getHistory<ScanResult>();
+  return all.filter((entry) => entry.projectId === projectId);
 }
 
 export function appendHistory<T>(entry: T): T[] {
@@ -83,6 +91,55 @@ export function appendHistory<T>(entry: T): T[] {
   const trimmed = history.slice(0, 200);
   writeJsonFile(HISTORY_FILE, { history: trimmed });
   return trimmed;
+}
+
+// --- Projects ---
+
+export function getProjects(): Project[] {
+  const all = readJsonStrict<{ projects?: Project[] }>(PROJECTS_FILE, { projects: [] });
+  return Array.isArray(all.projects) ? all.projects : [];
+}
+
+export function getProject(id: string): Project | null {
+  const projects = getProjects();
+  return projects.find((p) => p.id === id) ?? null;
+}
+
+export function createProject(name: string): Project {
+  const projects = getProjects();
+  const now = new Date().toISOString();
+  const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const newProject: Project = {
+    id,
+    name,
+    createdAt: now,
+    updatedAt: now,
+  };
+  projects.unshift(newProject);
+  writeJsonFile(PROJECTS_FILE, { projects });
+  return newProject;
+}
+
+export function touchProject(id: string): void {
+  const projects = getProjects();
+  const idx = projects.findIndex((p) => p.id === id);
+  if (idx >= 0) {
+    projects[idx].updatedAt = new Date().toISOString();
+    writeJsonFile(PROJECTS_FILE, { projects });
+  }
+}
+
+export function updateProject(project: Project): Project {
+  const projects = getProjects();
+  const idx = projects.findIndex((p) => p.id === project.id);
+  const updated = { ...project, updatedAt: new Date().toISOString() };
+  if (idx >= 0) {
+    projects[idx] = updated;
+  } else {
+    projects.unshift(updated);
+  }
+  writeJsonFile(PROJECTS_FILE, { projects });
+  return updated;
 }
 
 // --- Auth secret ---
@@ -149,7 +206,13 @@ export async function deleteSession(token: string): Promise<void> {
 // Re-export a single store facade for convenience.
 export const store = {
   getHistory,
+  getHistoryByProject,
   appendHistory,
+  getProjects,
+  getProject,
+  createProject,
+  touchProject,
+  updateProject,
   getAuthSecret,
   setAuthSecret,
   getSession,

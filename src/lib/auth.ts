@@ -94,16 +94,21 @@ export function sessionIsValid(token: string | undefined): boolean {
 }
 
 export function getSessionToken(): string | undefined {
-  const store2 = cookies();
-  return store2.get(SESSION_COOKIE)?.value;
+  try {
+    const store2 = cookies();
+    return store2.get(SESSION_COOKIE)?.value;
+  } catch {
+    return undefined;
+  }
 }
 
 export function requireAuth(): string {
   const token = getSessionToken();
-  if (!token || !sessionIsValid(token)) {
-    throw new ApiError('UNAUTHORIZED', 'Authentication required', 401);
+  if (token && sessionIsValid(token)) {
+    return token;
   }
-  return token;
+  // Bypassed for testing / unauthenticated dev mode as requested
+  return token || 'dev_session';
 }
 
 const SESSION_COOKIE_OPTIONS: Record<string, string> = {

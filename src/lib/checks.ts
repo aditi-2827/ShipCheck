@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { CategoryResult, CheckSummary, Issue, ScanResult } from './types';
-import { appendHistory } from './store';
+import type { CategoryResult, CheckSummary, Issue, ScanComparison, ScanResult } from './types';
+import { appendHistory, getHistoryByProject, touchProject } from './store';
 import { ApiError } from './http';
 
-const ROOT = process.cwd();
+const SERVER_ROOT = process.cwd();
 
 // Overall cap for the whole scan (per-command timeouts still apply individually).
 const SCAN_GLOBAL_DEADLINE_MS = 600_000; // 10 minutes
@@ -37,10 +37,6 @@ function resolveNpmCli(): string | null {
   return null;
 }
 
-// Resolve a hard-coded command program into a shell-free execFile invocation.
-// npm is launched via the node binary + npm-cli.js (no shell). node uses the
-// running binary explicitly. Everything else (git) is assumed to be a real
-// executable that execFile can find in PATH without a shell.
 function planSpawn(args: string[]): { file: string; cmdArgs: string[] } {
   const [program, ...rest] = args;
   if (program === 'npm') {
@@ -48,9 +44,6 @@ function planSpawn(args: string[]): { file: string; cmdArgs: string[] } {
     if (npmCli) {
       return { file: process.execPath, cmdArgs: [npmCli, ...rest] };
     }
-    // Fallback for environments where npm-cli.js cannot be located (e.g. a
-    // system npm not bundled with node). On POSIX npm is a real shebang script
-    // that execFile can spawn directly.
     return { file: 'npm', cmdArgs: rest };
   }
   if (program === 'node') {
@@ -70,7 +63,7 @@ function runCommand(
       planned.file,
       planned.cmdArgs,
       {
-        cwd: opts.cwd ?? ROOT,
+        cwd: opts.cwd ?? SERVER_ROOT,
         timeout: timeoutMs,
         maxBuffer: 10 * 1024 * 1024,
         windowsHide: true,
@@ -98,19 +91,9 @@ function runCommand(
   });
 }
 
-function fileExists(rel: string): boolean {
-  return fs.existsSync(path.join(ROOT, rel));
+function fileExists(targetDir: string, rel: string): boolean {
+  return fs.existsSync(path.join(targetDir, rel));
 }
-
-// ---------------------------------------------------------------------------
-// Isolated temporary workspace for executable checks (build / test / audit).
-//
-// The real repository is only ever *inspected* (git, secrets, .env.example,
-// Dockerfile, package metadata). Build/test execution happens in a scratch
-// directory that reuses node_modules through a Windows directory junction, so
-// npm run build generates its own .next there and NEVER touches the live
-// serving application's ROOT/.next.
-// ---------------------------------------------------------------------------
 
 // Minimal set of files needed to run npm audit / npm run build / npm test in
 // the isolated workspace. src/ is copied in full (the app code to compile).
@@ -130,7 +113,12 @@ interface TempWorkspace {
 }
 
 function copyTree(src: string, dest: string, copyNominee: (rel: string) => boolean): void {
-  const entries = fs.readdirSync(src, { withFileTypes: true });
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(src, { withFileTypes: true });
+  } catch {
+    return;
+  }
   for (const entry of entries) {
     const rel = entry.name;
     if (entry.name.startsWith('.env')) continue; // never copy any environment file/secret
@@ -150,37 +138,30 @@ function copyTree(src: string, dest: string, copyNominee: (rel: string) => boole
   }
 }
 
-function createTempWorkspace(): TempWorkspace {
-  // Workspace lives under the gitignored runtime area (never served, never
-  // public). Randomized name avoids collisions.
-  const base = path.join(ROOT, '.data', 'tmp');
+function createTempWorkspace(targetDir: string): TempWorkspace {
+  const base = path.join(SERVER_ROOT, '.data', 'tmp');
   fs.mkdirSync(base, { recursive: true });
   const dir = fs.mkdtempSync(path.join(base, 'scan-'));
 
   // Copy the minimal source/config set needed to execute the build/tests.
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
   for (const file of WORKSPACE_CONFIG_FILES) {
-    if (fs.existsSync(path.join(ROOT, file))) {
-      fs.copyFileSync(path.join(ROOT, file), path.join(dir, file));
+    if (fs.existsSync(path.join(targetDir, file))) {
+      fs.copyFileSync(path.join(targetDir, file), path.join(dir, file));
     }
   }
-  const srcRoot = path.join(ROOT, 'src');
+  const srcRoot = path.join(targetDir, 'src');
   if (fs.existsSync(srcRoot)) {
     copyTree(srcRoot, path.join(dir, 'src'), () => true);
   }
 
   // Reuse the installed dependencies through a Windows directory junction.
-  // No copy, no reinstall; the build resolves modules through the junction.
-  const realNodeModules = path.join(ROOT, 'node_modules');
+  const realNodeModules = path.join(targetDir, 'node_modules');
   const wsNodeModules = path.join(dir, 'node_modules');
   if (fs.existsSync(realNodeModules)) {
     try {
-      // 'junction' works on Windows without elevated privileges and maps the
-      // whole directory tree.
       fs.symlinkSync(realNodeModules, wsNodeModules, 'junction');
     } catch {
-      // Re-throw: do NOT silently fall back to copying or re-installing or to
-      // a weaker isolation strategy. Report so the caller can surface it.
       throw new Error(
         `Failed to create node_modules junction for the isolated scan workspace (${realNodeModules}). ` +
           'Cannot run the build/test checks without it.',
@@ -195,19 +176,16 @@ function destroyTempWorkspace(ws: TempWorkspace | null): void {
   if (!ws) return;
   try {
     const base = path.dirname(ws.dir);
-    // rmSync removes the junction target contents; ensure we only ever target
-    // a scan-* directory under the runtime tmp area (never ROOT).
     if (path.basename(ws.dir).startsWith('scan-') && base.endsWith(path.join('.data', 'tmp'))) {
       fs.rmSync(ws.dir, { recursive: true, force: true });
     }
   } catch {
-    // Best-effort cleanup; a leftover randomized, secret-free dir under
-    // gitignored .data/tmp is benign and will be reclaimed by the OS.
+    // Best-effort cleanup
   }
 }
 
-async function withTempWorkspace<T>(fn: (ws: TempWorkspace) => Promise<T>): Promise<T> {
-  const ws = createTempWorkspace();
+async function withTempWorkspace<T>(targetDir: string, fn: (ws: TempWorkspace) => Promise<T>): Promise<T> {
+  const ws = createTempWorkspace(targetDir);
   try {
     return await fn(ws);
   } finally {
@@ -215,9 +193,6 @@ async function withTempWorkspace<T>(fn: (ws: TempWorkspace) => Promise<T>): Prom
   }
 }
 
-// Same Windows-safe spawn planning as planSpawn(), but executed in a specific
-// working directory so the real repository directory is never the cwd for
-// build/test/audit commands (their .next lands in the isolated workspace).
 function runCommandIn(
   args: string[],
   cwd: string,
@@ -273,12 +248,12 @@ const SECRET_PATTERNS: { name: string; pattern: RegExp }[] = [
 
 const REQUIRED_ENV_VARS = ['DATABASE_URL'];
 
-function scanForSecrets(): Issue[] {
+function scanForSecrets(targetDir: string): Issue[] {
   const found: Issue[] = [];
   const roots = ['src'];
 
   for (const root of roots) {
-    if (!fs.existsSync(path.join(ROOT, root))) continue;
+    if (!fs.existsSync(path.join(targetDir, root))) continue;
     const walk = (dir: string): void => {
       let entries: fs.Dirent[];
       try {
@@ -298,7 +273,7 @@ function scanForSecrets(): Issue[] {
           } catch {
             continue;
           }
-          const rel = path.relative(ROOT, full);
+          const rel = path.relative(targetDir, full);
           for (const p of SECRET_PATTERNS) {
             const match = content.match(p.pattern);
             if (match && match.index !== undefined) {
@@ -317,14 +292,14 @@ function scanForSecrets(): Issue[] {
         }
       }
     };
-    walk(path.join(ROOT, root));
+    walk(path.join(targetDir, root));
   }
   return found;
 }
 
-function envExampleCheck(): Issue[] {
+function envExampleCheck(targetDir: string): Issue[] {
   const issues: Issue[] = [];
-  if (!fileExists('.env.example')) {
+  if (!fileExists(targetDir, '.env.example')) {
     issues.push({
       severity: 'warning',
       title: '.env.example is missing',
@@ -337,7 +312,7 @@ function envExampleCheck(): Issue[] {
   }
   let content: string;
   try {
-    content = fs.readFileSync(path.join(ROOT, '.env.example'), 'utf8');
+    content = fs.readFileSync(path.join(targetDir, '.env.example'), 'utf8');
   } catch {
     return issues;
   }
@@ -363,9 +338,9 @@ function envExampleCheck(): Issue[] {
   return issues;
 }
 
-function packageJsonTestScript(): boolean {
+function packageJsonTestScript(targetDir: string): boolean {
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
+    const pkg = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf8')) as {
       scripts?: Record<string, string>;
     };
     return Boolean(pkg.scripts && typeof pkg.scripts.test === 'string' && pkg.scripts.test.length > 0);
@@ -393,7 +368,7 @@ function toCategory(input: CategoryInput): CategoryResult {
   };
 }
 
-export async function runScan(): Promise<ScanResult> {
+export async function runScan(targetDir: string = process.cwd(), projectId?: string): Promise<ScanResult> {
   if (activeScan) {
     throw new ApiError('CONFLICT', 'A scan is already running. Wait for it to finish.', 409);
   }
@@ -401,10 +376,33 @@ export async function runScan(): Promise<ScanResult> {
   const controller = new AbortController();
   const deadlineTimer = setTimeout(() => controller.abort(), SCAN_GLOBAL_DEADLINE_MS);
   try {
-    const result = await scanBody(controller.signal);
+    const result = await scanBody(targetDir, projectId, controller.signal);
     if (controller.signal.aborted) {
       throw new ApiError('SCAN_FAILED', 'Scan exceeded the global time limit', 503);
     }
+
+    if (projectId) {
+      const past = getHistoryByProject(projectId);
+      const previousScan = past[0] ?? null;
+      if (previousScan) {
+        const scoreDelta = result.score - previousScan.score;
+        const resolvedIssues = previousScan.issues.filter(
+          (p) => !result.issues.some((c) => c.title === p.title && c.file === p.file),
+        );
+        const introducedIssues = result.issues.filter(
+          (c) => !previousScan.issues.some((p) => p.title === c.title && p.file === c.file),
+        );
+        const comparison: ScanComparison = {
+          previousScore: previousScan.score,
+          scoreDelta,
+          resolvedIssues,
+          introducedIssues,
+        };
+        result.comparison = comparison;
+      }
+      touchProject(projectId);
+    }
+
     void appendHistory(result);
     return result;
   } finally {
@@ -413,12 +411,12 @@ export async function runScan(): Promise<ScanResult> {
   }
 }
 
-async function scanBody(signal: AbortSignal): Promise<ScanResult> {
+async function scanBody(targetDir: string, projectId: string | undefined, signal: AbortSignal): Promise<ScanResult> {
   const started = Date.now();
 
   // --- Environment ---
-  const nodeRes = await runCommand(['node', '--version'], { timeoutMs: 10_000, signal });
-  const npmRes = await runCommand(['npm', '--version'], { timeoutMs: 10_000, signal });
+  const nodeRes = await runCommand(['node', '--version'], { timeoutMs: 10_000, signal, cwd: targetDir });
+  const npmRes = await runCommand(['npm', '--version'], { timeoutMs: 10_000, signal, cwd: targetDir });
   const envChecks: CheckSummary[] = [
     {
       slug: 'node',
@@ -435,9 +433,9 @@ async function scanBody(signal: AbortSignal): Promise<ScanResult> {
   ];
 
   // --- Git ---
-  const branchRes = await runCommand(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 10_000, signal });
-  const statusRes = await runCommand(['git', 'status', '--porcelain'], { timeoutMs: 10_000, signal });
-  const commitRes = await runCommand(['git', 'rev-parse', '--short', 'HEAD'], { timeoutMs: 10_000, signal });
+  const branchRes = await runCommand(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 10_000, signal, cwd: targetDir });
+  const statusRes = await runCommand(['git', 'status', '--porcelain'], { timeoutMs: 10_000, signal, cwd: targetDir });
+  const commitRes = await runCommand(['git', 'rev-parse', '--short', 'HEAD'], { timeoutMs: 10_000, signal, cwd: targetDir });
   const clean = statusRes.exitCode === 0 && isCleanGitStatus(statusRes.stdout);
   const gitIssues: Issue[] = [];
   if (!clean) {
@@ -468,16 +466,12 @@ async function scanBody(signal: AbortSignal): Promise<ScanResult> {
   ];
 
   // --- Dependencies / Build / Tests ---
-  // These run in an isolated temporary workspace (own .next, node_modules
-  // joined), so they never write into the live serving project's ROOT/.next.
-  // Inspection logic (manifest presence, test-script presence) still reads the
-  // real repository; only command *execution* happens in the workspace.
   const { auditIssues, depSummary, depStatus, buildIssues, buildStatus, buildSummary, testIssues, testStatus, testSummary } =
-    await withTempWorkspace(async (ws) => {
+    await withTempWorkspace(targetDir, async (ws) => {
       const auditIssues: Issue[] = [];
       let depSummary = 'not run';
       let depStatus: CheckSummary['status'] = 'pass';
-      if (fileExists('package-lock.json') || fileExists('package.json')) {
+      if (fileExists(targetDir, 'package-lock.json') || fileExists(targetDir, 'package.json')) {
         const auditRes = await runCommandIn(['npm', 'audit', '--audit-level=high', '--json'], ws.dir, {
           timeoutMs: 60_000,
           signal,
@@ -504,7 +498,7 @@ async function scanBody(signal: AbortSignal): Promise<ScanResult> {
       const buildIssues: Issue[] = [];
       let buildStatus: CheckSummary['status'] = 'pass';
       let buildSummary = 'Build valid';
-      if (fileExists('package.json')) {
+      if (fileExists(targetDir, 'package.json')) {
         const buildRes = await runCommandIn(['npm', 'run', 'build'], ws.dir, { timeoutMs: 180_000, signal });
         if (buildRes.exitCode === 0) {
           buildStatus = 'pass';
@@ -535,7 +529,7 @@ async function scanBody(signal: AbortSignal): Promise<ScanResult> {
       const testIssues: Issue[] = [];
       let testStatus: CheckSummary['status'] = 'pass';
       let testSummary = 'No test suite configured';
-      if (packageJsonTestScript()) {
+      if (packageJsonTestScript(targetDir)) {
         const testRes = await runCommandIn(['npm', 'test'], ws.dir, { timeoutMs: 180_000, signal });
         if (testRes.exitCode === 0) {
           testStatus = 'pass';
@@ -586,11 +580,11 @@ async function scanBody(signal: AbortSignal): Promise<ScanResult> {
   const dockerIssues: Issue[] = [];
   let dockerStatus: CheckSummary['status'] = 'pass';
   let dockerSummary = 'No Dockerfile detected';
-  if (fileExists('Dockerfile') || fileExists('docker-compose.yml') || fileExists('compose.yaml')) {
+  if (fileExists(targetDir, 'Dockerfile') || fileExists(targetDir, 'docker-compose.yml') || fileExists(targetDir, 'compose.yaml')) {
     dockerStatus = 'pass';
     dockerSummary = 'Docker configuration present';
-    if (fileExists('Dockerfile')) {
-      const df = fs.readFileSync(path.join(ROOT, 'Dockerfile'), 'utf8');
+    if (fileExists(targetDir, 'Dockerfile')) {
+      const df = fs.readFileSync(path.join(targetDir, 'Dockerfile'), 'utf8');
       if (!/^FROM\s+/im.test(df)) {
         dockerStatus = 'warning';
         dockerSummary = 'Dockerfile present but missing a base image (FROM)';
@@ -610,8 +604,8 @@ async function scanBody(signal: AbortSignal): Promise<ScanResult> {
   ];
 
   // --- Security ---
-  const secretIssues = scanForSecrets();
-  const envIssues = envExampleCheck();
+  const secretIssues = scanForSecrets(targetDir);
+  const envIssues = envExampleCheck(targetDir);
   const securityIssues = [...secretIssues, ...envIssues];
   const secretFound = secretIssues.length > 0;
   const securityChecks: CheckSummary[] = [
@@ -661,6 +655,7 @@ async function scanBody(signal: AbortSignal): Promise<ScanResult> {
 
   const result: ScanResult = {
     id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+    ...(projectId ? { projectId } : {}),
     createdAt: new Date().toISOString(),
     score,
     status,
