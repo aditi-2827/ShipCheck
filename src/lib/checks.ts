@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { CategoryResult, CheckSummary, Issue, ScanComparison, ScanResult } from './types';
 import { appendHistory, getHistoryByProject, touchProject } from './store';
+import { FEED_DATA } from './data';
 import { ApiError } from './http';
 
 const SERVER_ROOT = process.cwd();
@@ -95,24 +96,14 @@ function fileExists(targetDir: string, rel: string): boolean {
   return fs.existsSync(path.join(targetDir, rel));
 }
 
-// Minimal set of files needed to run npm audit / npm run build / npm test in
-// the isolated workspace. src/ is copied in full (the app code to compile).
-const WORKSPACE_CONFIG_FILES: string[] = [
-  'package.json',
-  'package-lock.json',
-  'next.config.mjs',
-  'next-env.d.ts',
-  'tsconfig.json',
-  'tailwind.config.ts',
-  'postcss.config.js',
-  '.eslintrc.json',
-];
-
 interface TempWorkspace {
   dir: string;
 }
 
-function copyTree(src: string, dest: string, copyNominee: (rel: string) => boolean): void {
+// Everything that must reach the isolated build/test workspace.
+const WS_EXCLUDE_DIRS = new Set(['node_modules', '.next', '.git', '.data', 'dist', 'build', '__pycache__']);
+
+function copyTreeFull(src: string, dest: string): void {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(src, { withFileTypes: true });
@@ -120,19 +111,18 @@ function copyTree(src: string, dest: string, copyNominee: (rel: string) => boole
     return;
   }
   for (const entry of entries) {
-    const rel = entry.name;
     if (entry.name.startsWith('.env')) continue; // never copy any environment file/secret
-    if (rel === 'node_modules' || rel === '.next' || rel === '.data' || rel === '.git') continue;
-    const from = path.join(src, rel);
+    if (WS_EXCLUDE_DIRS.has(entry.name)) continue;
+    const from = path.join(src, entry.name);
+    const to = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      if (copyNominee(rel)) {
-        const to = path.join(dest, rel);
-        fs.mkdirSync(to, { recursive: true });
-        copyTree(from, to, copyNominee);
-      }
+      fs.mkdirSync(to, { recursive: true });
+      copyTreeFull(from, to);
     } else {
-      if (copyNominee(rel)) {
-        fs.copyFileSync(from, path.join(dest, rel));
+      try {
+        fs.copyFileSync(from, to);
+      } catch {
+        // Skip unreadable/unsupported files rather than failing the whole scan.
       }
     }
   }
@@ -142,18 +132,7 @@ function createTempWorkspace(targetDir: string): TempWorkspace {
   const base = path.join(SERVER_ROOT, '.data', 'tmp');
   fs.mkdirSync(base, { recursive: true });
   const dir = fs.mkdtempSync(path.join(base, 'scan-'));
-
-  // Copy the minimal source/config set needed to execute the build/tests.
-  fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
-  for (const file of WORKSPACE_CONFIG_FILES) {
-    if (fs.existsSync(path.join(targetDir, file))) {
-      fs.copyFileSync(path.join(targetDir, file), path.join(dir, file));
-    }
-  }
-  const srcRoot = path.join(targetDir, 'src');
-  if (fs.existsSync(srcRoot)) {
-    copyTree(srcRoot, path.join(dir, 'src'), () => true);
-  }
+  copyTreeFull(targetDir, dir);
 
   // Reuse the installed dependencies through a Windows directory junction.
   const realNodeModules = path.join(targetDir, 'node_modules');
@@ -246,54 +225,47 @@ const SECRET_PATTERNS: { name: string; pattern: RegExp }[] = [
   { name: 'generic API key assignment', pattern: /(api[_-]?key|secret|token)\s*[:=]\s*['"][A-Za-z0-9_\-]{16,}['"]/i },
 ];
 
-const REQUIRED_ENV_VARS = ['DATABASE_URL'];
-
 function scanForSecrets(targetDir: string): Issue[] {
   const found: Issue[] = [];
-  const roots = ['src'];
-
-  for (const root of roots) {
-    if (!fs.existsSync(path.join(targetDir, root))) continue;
-    const walk = (dir: string): void => {
-      let entries: fs.Dirent[];
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        if (entry.name === 'node_modules' || entry.name === '.next' || entry.name === '.git') continue;
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          walk(full);
-        } else if (/\.(ts|tsx|js|jsx|env|json)$/.test(entry.name)) {
-          let content: string;
-          try {
-            content = fs.readFileSync(full, 'utf8');
-          } catch {
-            continue;
-          }
-          const rel = path.relative(targetDir, full);
-          for (const p of SECRET_PATTERNS) {
-            const match = content.match(p.pattern);
-            if (match && match.index !== undefined) {
-              const line = content.slice(0, match.index).split(/\r?\n/).length;
-              found.push({
-                severity: 'critical',
-                title: `Possible ${p.name} in source`,
-                file: rel,
-                line,
-                message: `A pattern matching "${p.name}" was found in a tracked source file.`,
-                fix: 'Remove the secret, move it to an environment variable, and ensure it is excluded from Git tracking.',
-              });
-              break;
-            }
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (WS_EXCLUDE_DIRS.has(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (/\.(ts|tsx|js|jsx|mjs|cjs|vue|svelte|py|rb|php|go|rs|env|json|ya?ml|toml|ini|env\.example)$/.test(entry.name)) {
+        let content: string;
+        try {
+          content = fs.readFileSync(full, 'utf8');
+        } catch {
+          continue;
+        }
+        const rel = path.relative(targetDir, full);
+        for (const p of SECRET_PATTERNS) {
+          const match = content.match(p.pattern);
+          if (match && match.index !== undefined) {
+            const line = content.slice(0, match.index).split(/\r?\n/).length;
+            found.push({
+              severity: 'critical',
+              title: `Possible ${p.name} in source`,
+              file: rel,
+              line,
+              message: `A pattern matching "${p.name}" was found in a source file.`,
+              fix: 'Remove the secret, move it to an environment variable, and ensure it is excluded from Git tracking.',
+            });
+            break;
           }
         }
       }
-    };
-    walk(path.join(targetDir, root));
-  }
+    }
+  };
+  walk(targetDir);
   return found;
 }
 
@@ -308,45 +280,27 @@ function envExampleCheck(targetDir: string): Issue[] {
       message: 'The repository does not ship an environment template.',
       fix: 'Create a .env.example documenting all required environment variables.',
     });
-    return issues;
-  }
-  let content: string;
-  try {
-    content = fs.readFileSync(path.join(targetDir, '.env.example'), 'utf8');
-  } catch {
-    return issues;
-  }
-  const declared = new Set(
-    content
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l && !l.startsWith('#'))
-      .map((l) => l.split('=')[0].trim()),
-  );
-  for (const name of REQUIRED_ENV_VARS) {
-    if (!declared.has(name)) {
-      issues.push({
-        severity: 'warning',
-        title: `.env.example is missing ${name}`,
-        file: '.env.example',
-        line: null,
-        message: `The environment template does not declare required value "${name}".`,
-        fix: `Add ${name} to the example file and document its expected format.`,
-      });
-    }
   }
   return issues;
 }
 
-function packageJsonTestScript(targetDir: string): boolean {
+function packageJsonScript(targetDir: string, name: string): boolean {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf8')) as {
       scripts?: Record<string, string>;
     };
-    return Boolean(pkg.scripts && typeof pkg.scripts.test === 'string' && pkg.scripts.test.length > 0);
+    return Boolean(pkg.scripts && typeof pkg.scripts[name] === 'string' && pkg.scripts[name].length > 0);
   } catch {
     return false;
   }
+}
+
+function packageJsonTestScript(targetDir: string): boolean {
+  return packageJsonScript(targetDir, 'test');
+}
+
+function packageJsonBuildScript(targetDir: string): boolean {
+  return packageJsonScript(targetDir, 'build');
 }
 
 interface CategoryInput {
@@ -366,6 +320,30 @@ function toCategory(input: CategoryInput): CategoryResult {
     score: `${passed}/${total}`,
     childChecks: input.checks,
   };
+}
+
+// Per-category weighted ship score (0-100). Each category contributes up to its
+// weight when healthy; a warning keeps half of its weight, a critical category
+// contributes nothing. Unknown categories fall back to the remaining weight
+// split evenly.
+function computeScore(categories: CategoryResult[]): number {
+  const weights = FEED_DATA.categoryWeights;
+  const knownWeight = categories.reduce((sum, c) => sum + (weights[c.slug] ?? 0), 0);
+  const leftover = Math.max(0, 100 - knownWeight);
+  const unknownCategories = categories.filter((c) => weights[c.slug] === undefined);
+  const perUnknown = leftover / Math.max(1, unknownCategories.length);
+
+  let score = 0;
+  for (const cat of categories) {
+    const base = weights[cat.slug] ?? perUnknown;
+    if (cat.status === 'pass') {
+      score += base;
+    } else if (cat.status === 'warning') {
+      score += base / 2;
+    }
+    // critical -> 0
+  }
+  return Math.max(0, Math.min(100, Math.round(score)));
 }
 
 export async function runScan(targetDir: string = process.cwd(), projectId?: string): Promise<ScanResult> {
@@ -499,27 +477,40 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
       let buildStatus: CheckSummary['status'] = 'pass';
       let buildSummary = 'Build valid';
       if (fileExists(targetDir, 'package.json')) {
-        const buildRes = await runCommandIn(['npm', 'run', 'build'], ws.dir, { timeoutMs: 180_000, signal });
-        if (buildRes.exitCode === 0) {
-          buildStatus = 'pass';
-          buildSummary = buildRes.timedOut ? 'Build timed out' : 'Build completed successfully';
-          if (buildRes.timedOut) buildStatus = 'warning';
-        } else {
-          buildStatus = 'critical';
-          buildSummary = `Build failed (exit ${buildRes.exitCode ?? 'n/a'})`;
-          const lastLines = (buildRes.stderr || buildRes.stdout || '')
-            .split(/\r?\n/)
-            .filter((l) => l.trim())
-            .slice(-5)
-            .join(' ');
+        if (!packageJsonBuildScript(targetDir)) {
+          buildStatus = 'warning';
+          buildSummary = 'No build script configured';
           buildIssues.push({
-            severity: 'critical',
-            title: 'Production build failed',
-            file: null,
+            severity: 'warning',
+            title: 'No build script configured',
+            file: 'package.json',
             line: null,
-            message: `npm run build did not complete successfully. ${lastLines}`,
-            fix: 'Fix the build errors reported by the bundler/compiler.',
+            message: 'There is no "build" script in package.json, so no production build could be run.',
+            fix: 'Add a "build" script to package.json if this package should produce a deployable build.',
           });
+        } else {
+          const buildRes = await runCommandIn(['npm', 'run', 'build'], ws.dir, { timeoutMs: 180_000, signal });
+          if (buildRes.exitCode === 0) {
+            buildStatus = 'pass';
+            buildSummary = buildRes.timedOut ? 'Build timed out' : 'Build completed successfully';
+            if (buildRes.timedOut) buildStatus = 'warning';
+          } else {
+            buildStatus = 'critical';
+            buildSummary = `Build failed (exit ${buildRes.exitCode ?? 'n/a'})`;
+            const lastLines = (buildRes.stderr || buildRes.stdout || '')
+              .split(/\r?\n/)
+              .filter((l) => l.trim())
+              .slice(-5)
+              .join(' ');
+            buildIssues.push({
+              severity: 'critical',
+              title: 'Production build failed',
+              file: null,
+              line: null,
+              message: `npm run build did not complete successfully. ${lastLines}`,
+              fix: 'Fix the build errors reported by the bundler/compiler.',
+            });
+          }
         }
       } else {
         buildStatus = 'warning';
@@ -646,12 +637,8 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
   const blockers = issues.filter((i) => i.severity === 'critical').length;
   const warnings = issues.filter((i) => i.severity === 'warning').length;
 
-  let score = 100;
-  score -= blockers * 15;
-  score -= warnings * 5;
-  score = Math.max(0, Math.min(100, score));
-
-  const status = score >= 80 ? 'READY' : score >= 60 ? 'WARNING' : 'BLOCKED';
+  const score = computeScore(categories);
+  const status = score >= FEED_DATA.thresholds.ready ? 'READY' : score >= FEED_DATA.thresholds.warning ? 'WARNING' : 'BLOCKED';
 
   const result: ScanResult = {
     id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,

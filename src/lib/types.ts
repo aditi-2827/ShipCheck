@@ -73,4 +73,5 @@ export interface FeedData {
     ready: number;
     warning: number;
   };
+  categoryWeights: Record<string, number>;
 }
