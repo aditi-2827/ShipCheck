@@ -11,6 +11,18 @@ ShipCheck: a dark, terminal-inspired "deployment-readiness" analyzer. Frontend i
 - **No `test` script** — so a scan's "Tests" check reports "not configured" until one is added.
 - No CI workflows directory (`.github/`).
 
+## CLI (`node bin/shipcheck.js` / global `shipcheck`)
+
+The CLI is the primary entry point (see `bin/shipcheck.js`):
+
+- `shipcheck server` — the **canonical way to start the server**. Generates/reuses a boot token, auto-runs `next build` if `.next/BUILD_ID` is missing, spawns `next start` (or `next dev` with `--dev`), and prints `Dashboard: http://<host>:<port>/?token=<bootToken>`. If a ShipCheck server already answers on the port and accepts our token, it reuses it instead of spawning a duplicate. Options: `--port N` (default 3140), `--host H` (default 127.0.0.1), `--dev`.
+- `shipcheck init` — register the **current directory** as a project (writes `.shipcheck.json`).
+- `shipcheck scan` — real scan of the **current directory** against the server (slow; runs build/tests).
+- Commands run in the current directory; for monorepos run `init`/`scan` once per package root.
+- The CLI talks to `http://localhost:3140` by default; override with `SHIPCHECK_SERVER_URL`.
+- Auth: the CLI authenticates using the boot token from `SHIPCHECK_BOOT_TOKEN` or `~/.shipcheckrc` (sent as `x-shipcheck-token`), else a persisted session cookie, else `SHIPCHECK_PASSWORD` login.
+- A server started by the CLI (or with `SHIPCHECK_BOOT_TOKEN` set) publishes the token to `~/.shipcheckrc` via `next.config.mjs`, so the CLI can discover it no matter how the server was started.
+
 ## Backend architecture
 
 Route Handlers under `src/app/api/`, shared logic in `src/lib/`. All server-side, no external services:

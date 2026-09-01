@@ -99,7 +99,13 @@ async function requestApi(serverUrl, apiPath, method = 'GET', body = null, cooki
     );
 
     req.on('error', (err) => {
-      reject(new Error(`Could not connect to ShipCheck server at ${serverUrl}: ${err.message}`));
+      reject(
+        new Error(
+          `Could not connect to ShipCheck server at ${serverUrl}: ${err.message}\n` +
+            `Start it with \`shipcheck server\`, or if it runs on a different port ` +
+            `(e.g. \`npm run dev\` on 3000), set SHIPCHECK_SERVER_URL.`,
+        ),
+      );
     });
 
     if (payload) {
@@ -208,9 +214,29 @@ function waitForServerReady(serverUrl, timeoutMs) {
   });
 }
 
+// Run `next build` in the package root so `shipcheck server` always works
+// regardless of whether a `.next` production build already exists.
+function runNextBuild() {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [NEXT_BIN, 'build'], { cwd: PACKAGE_ROOT, stdio: 'inherit' });
+    child.on('error', (err) => reject(new Error(`Could not run \`next build\`: ${err.message}`)));
+    child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`\`next build\` failed with exit code ${code}`))));
+  });
+}
+
+async function isServerUp(serverUrl) {
+  try {
+    const res = await requestApi(serverUrl, '/api/feed', 'GET');
+    return res.statusCode === 200 && res.data && res.data.ok;
+  } catch {
+    return false;
+  }
+}
+
 // `shipcheck server` - start the bundled Next.js server (production `next start`
-// unless --dev) with a boot token, print the clickable dashboard link, and stay
-// attached until the server exits.
+// unless --dev), print the clickable dashboard link, and stay attached until the
+// server exits. If a ShipCheck server is already running on the port, it is
+// reused instead of spawning a duplicate.
 async function handleServer(flags) {
   const dev = Boolean(flags.dev);
   const port = Number(flags.port) || Number(process.env.SHIPCHECK_PORT) || 3140;
@@ -218,20 +244,42 @@ async function handleServer(flags) {
   const displayHost = host === '0.0.0.0' ? 'localhost' : host;
   const baseUrl = `http://${displayHost}:${port}`;
 
-  const buildFile = path.join(PACKAGE_ROOT, '.next', 'BUILD_ID');
-  if (!dev && !fs.existsSync(buildFile)) {
-    throw new Error(
-      `Production build not found at ${path.join(PACKAGE_ROOT, '.next')}\n` +
-        `Run \`npm run build\` in ${PACKAGE_ROOT} first, or start in dev mode with \`shipcheck server --dev\`.`,
-    );
-  }
-  if (!fs.existsSync(NEXT_BIN)) {
-    throw new Error(`Next.js binary not found at ${NEXT_BIN}. Are the dependencies installed?`);
-  }
-
   // Reuse the previous boot token when possible so links and `shipcheck init` /
   // `shipcheck scan` keep working across server restarts on the same machine.
   const bootToken = readGlobalRc().bootToken || crypto.randomBytes(32).toString('hex');
+
+  // Something already answers on this port - reuse it when our token matches.
+  if (await isServerUp(baseUrl)) {
+    let tokenOk = false;
+    try {
+      const meRes = await requestApi(baseUrl, '/api/auth/me', 'GET', null, null, bootToken);
+      tokenOk = meRes.statusCode === 200 && meRes.data && meRes.data.data && meRes.data.data.authenticated === true;
+    } catch {
+      tokenOk = false;
+    }
+    if (tokenOk) {
+      writeGlobalRc({ bootToken, serverUrl: baseUrl });
+      console.log('\nShipCheck server is already running.\n');
+      console.log(`Dashboard:  ${baseUrl}/?token=${bootToken}\n`);
+      return;
+    }
+    throw new Error(
+      `A ShipCheck server is already running at ${baseUrl} but it was started with a different token.\n` +
+        `Use that instance's own dashboard link, or start a separate one with \`shipcheck server --port N\`.`,
+    );
+  }
+
+  if (!fs.existsSync(NEXT_BIN)) {
+    throw new Error(`Next.js binary not found at ${NEXT_BIN}. Are the dependencies installed?`);
+  }
+  const buildFile = path.join(PACKAGE_ROOT, '.next', 'BUILD_ID');
+  if (!dev && !fs.existsSync(buildFile)) {
+    console.log('No production build found. Building ShipCheck first (can take a minute)...\n');
+    await runNextBuild();
+  }
+
+  // Persist the token/URL before starting so the CLI can authenticate even if
+  // the server takes a moment to boot.
   writeGlobalRc({ bootToken, serverUrl: baseUrl });
 
   const mode = dev ? 'dev' : 'start';
@@ -304,8 +352,8 @@ async function handleInit() {
   const auth = await authenticate(serverUrl);
   if (!auth.token && !auth.cookie) {
     throw new Error(
-      'Authentication required. Start the server with `shipcheck server` and use its printed token, ' +
-        'or set SHIPCHECK_PASSWORD.',
+      'Authentication required. Start the server with `shipcheck server` and open the link it prints, ' +
+        'or set SHIPCHECK_PASSWORD. If your server runs on a port other than 3140, set SHIPCHECK_SERVER_URL.',
     );
   }
 
@@ -360,8 +408,8 @@ async function handleScan() {
   const auth = await authenticate(serverUrl);
   if (!auth.token && !auth.cookie) {
     throw new Error(
-      'Authentication required. Start the server with `shipcheck server` and use its printed token, ' +
-        'or set SHIPCHECK_PASSWORD.',
+      'Authentication required. Start the server with `shipcheck server` and open the link it prints, ' +
+        'or set SHIPCHECK_PASSWORD. If your server runs on a port other than 3140, set SHIPCHECK_SERVER_URL.',
     );
   }
 
