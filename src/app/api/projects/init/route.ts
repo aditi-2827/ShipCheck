@@ -6,7 +6,6 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
   try {
-    requireAuth();
     const body = await readJson(req);
     const rawName = body.name;
     const name = typeof rawName === 'string' ? rawName.trim() : '';

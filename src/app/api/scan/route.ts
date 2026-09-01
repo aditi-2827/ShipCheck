@@ -10,8 +10,6 @@ export const maxDuration = 240;
 
 export async function POST(req: Request) {
   try {
-    requireAuth();
-
     let projectId: string | undefined;
     let targetDir: string = process.cwd();
 

@@ -1,7 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { getMe, setUnauthorizedHandler } from '@/lib/api';
+import { useEffect, useState } from 'react';
 import type { Project, ScanResult } from '@/lib/types';
 
 type State = 'pass' | 'warning' | 'critical' | 'running' | 'pending';
@@ -152,32 +151,16 @@ function groupScansByDate(scans: ScanResult[]) {
 }
 
 export default function ProjectDashboard({ params }: { params: { id: string } }) {
-  const [authStatus, setAuthStatus] = useState<'loading' | 'authed' | 'anon'>('loading');
   const [filter, setFilter] = useState('all');
   const [project, setProject] = useState<Project | null>(null);
   const [history, setHistory] = useState<ScanResult[]>([]);
   const [selectedScanId, setSelectedScanId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
 
-  const goLogin = useCallback(() => {
-    setAuthStatus('anon');
-    window.location.assign('/login');
-  }, []);
-
   useEffect(() => {
-    setUnauthorizedHandler(goLogin);
     let cancelled = false;
     (async () => {
       try {
-        const me = await getMe();
-        if (cancelled) return;
-        if (!me.authenticated) {
-          setAuthStatus('anon');
-          window.location.assign('/login');
-          return;
-        }
-        setAuthStatus('authed');
-
         const res = await fetch(`/api/projects/${params.id}`, { credentials: 'same-origin' });
         if (!res.ok) {
           setErrorMsg(`Project not found (${params.id})`);
@@ -197,14 +180,12 @@ export default function ProjectDashboard({ params }: { params: { id: string } })
         }
       } catch {
         if (cancelled) return;
-        goLogin();
       }
     })();
     return () => {
       cancelled = true;
-      setUnauthorizedHandler(null);
     };
-  }, [params.id, goLogin]);
+  }, [params.id]);
 
   const latestScan = history[0] ?? null;
   const activeScan = history.find((s) => s.id === selectedScanId) ?? latestScan;
@@ -233,40 +214,6 @@ export default function ProjectDashboard({ params }: { params: { id: string } })
   const score = activeScan ? activeScan.score : null;
   const lastScanAgo = latestScan ? timeAgo(latestScan.createdAt) : 'no scans yet';
   const dateGroups = groupScansByDate(history);
-
-  if (authStatus === 'loading') {
-    return (
-      <main className="min-h-screen">
-        <div className="shell">
-          <header className="topbar">
-            <a href="/" className="brand">
-              <span className="brand-mark">SC</span>
-              <span>SHIPCHECK</span>
-              <small>PROJECT DASHBOARD</small>
-            </a>
-          </header>
-          <div style={{ display: 'grid', placeItems: 'center', minHeight: '70vh' }}>
-            <div className="status-instrument" style={{ width: '100%', maxWidth: 380 }}>
-              <div className="instrument-head">
-                <span>PROJECT HEALTH</span>
-                <span className="live">
-                  <i /> LIVE
-                </span>
-              </div>
-              <div className="ready-row">
-                <Marker state="running" />
-                <span>LOADING PROJECT...</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  if (authStatus === 'anon') {
-    return null;
-  }
 
   return (
     <main className="min-h-screen">

@@ -4,10 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   getFeed,
   getHistory,
-  getMe,
-  logout,
   runScan as apiRunScan,
-  setUnauthorizedHandler,
   ClientApiError,
 } from '@/lib/api';
 import type { FeedData, ScanResult } from '@/lib/types';
@@ -41,7 +38,6 @@ interface TimelineRow {
 }
 
 export default function Home() {
-  const [authStatus, setAuthStatus] = useState<'loading' | 'authed' | 'anon'>('loading');
   const [filter, setFilter] = useState('all');
   const [scanning, setScanning] = useState(false);
   const [feed, setFeed] = useState<FeedData | null>(null);
@@ -49,38 +45,22 @@ export default function Home() {
   const [history, setHistory] = useState<ScanResult[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
 
-  const goLogin = useCallback(() => {
-    setAuthStatus('anon');
-    window.location.assign('/login');
-  }, []);
-
   useEffect(() => {
-    setUnauthorizedHandler(goLogin);
     let cancelled = false;
     (async () => {
       try {
-        const me = await getMe();
-        if (cancelled) return;
-        if (!me.authenticated) {
-          setAuthStatus('anon');
-          window.location.assign('/login');
-          return;
-        }
-        setAuthStatus('authed');
         const [f, h] = await Promise.all([getFeed(), getHistory()]);
         if (cancelled) return;
         setFeed(f);
         setHistory(h);
       } catch {
         if (cancelled) return;
-        goLogin();
       }
     })();
     return () => {
       cancelled = true;
-      setUnauthorizedHandler(null);
     };
-  }, [goLogin]);
+  }, []);
 
   const runScan = useCallback(async () => {
     if (scanning) return;
@@ -96,8 +76,6 @@ export default function Home() {
           setErrorMsg('A scan is already running. Wait for it to finish.');
         } else if (err.status === 503) {
           setErrorMsg('The scan exceeded the global time limit.');
-        } else if (err.status === 401) {
-          goLogin();
         } else {
           setErrorMsg(err.message);
         }
@@ -107,16 +85,7 @@ export default function Home() {
     } finally {
       setScanning(false);
     }
-  }, [scanning, goLogin]);
-
-  const doLogout = useCallback(async () => {
-    try {
-      await logout();
-    } catch {
-      // Ignore network errors; still redirect to the login screen.
-    }
-    window.location.assign('/login');
-  }, []);
+  }, [scanning]);
 
   const categories: { name: string; status: string; score: string }[] = result
     ? result.categories.map((c) => ({ name: c.name, status: c.status, score: c.score }))
@@ -151,46 +120,9 @@ export default function Home() {
     };
   });
 
-  if (authStatus === 'loading') {
-    return (
-      <main className="min-h-screen">
-        <div className="shell">
-          <header className="topbar">
-            <a href="#top" className="brand">
-              <span className="brand-mark">SC</span>
-              <span>SHIPCHECK</span>
-              <small>LOCAL-FIRST / v1.0</small>
-            </a>
-            <div className="local-state">
-              <i /> LOCAL
-            </div>
-          </header>
-          <div style={{ display: 'grid', placeItems: 'center', minHeight: '70vh' }}>
-            <div className="status-instrument" style={{ width: '100%', maxWidth: 380 }}>
-              <div className="instrument-head">
-                <span>SHIPCHECK STATUS</span>
-                <span className="live">
-                  <i /> LIVE
-                </span>
-              </div>
-              <div className="ready-row">
-                <Marker state="running" />
-                <span>CHECKING AUTH... </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  if (authStatus === 'anon') {
-    return null;
-  }
-
   return (
     <main className="min-h-screen"><div className="shell">
-      <header className="topbar"><a href="#top" className="brand"><span className="brand-mark">SC</span><span>SHIPCHECK</span><small>LOCAL-FIRST / v1.0</small></a><nav className="nav" aria-label="Primary navigation">{['Overview', 'Checks', 'Issues', 'Pipeline', 'History', 'Settings'].map((item, index) => <a key={item} href={`#${item.toLowerCase()}`} className={index === 0 ? 'nav-active' : ''}><b>0{index + 1}</b>{item}<kbd>G {item[0]}</kbd></a>)}</nav><div className="local-state"><i /> LOCAL</div><button className="text-button" onClick={doLogout} style={{ background: 'none', border: 0, cursor: 'pointer' }}>SIGN OUT <span>↗</span></button></header>
+      <header className="topbar"><a href="#top" className="brand"><span className="brand-mark">SC</span><span>SHIPCHECK</span><small>LOCAL-FIRST / v1.0</small></a><nav className="nav" aria-label="Primary navigation">{['Overview', 'Checks', 'Issues', 'Pipeline', 'History', 'Settings'].map((item, index) => <a key={item} href={`#${item.toLowerCase()}`} className={index === 0 ? 'nav-active' : ''}><b>0{index + 1}</b>{item}<kbd>G {item[0]}</kbd></a>)}</nav><div className="local-state"><i /> LOCAL</div></header>
 
       <section id="top" className="hero"><div className="hero-copy"><p className="eyebrow"><span className="signal" /> DEPLOYMENT INTELLIGENCE / LOCAL-FIRST</p><h1><strong>SHIP</strong><em>with</em><strong className="accent-text">CONFIDENCE.</strong></h1><p className="hero-lede">Know what is healthy, what needs attention, and what blocks deployment before your code leaves the machine.</p><div className="actions"><button className="primary-button" onClick={runScan}><span>{scanning ? '↻' : '▶'}</span>{scanning ? 'SCANNING...' : 'RUN SHIPCHECK'}</button><a className="text-button" href="#issues">VIEW ISSUES <span>↗</span></a></div>{errorMsg && <p className="red-text" style={{ font: '500 10px "JetBrains Mono", monospace', letterSpacing: '.08em', textTransform: 'uppercase', margin: '20px 0 0' }}>{errorMsg}</p>}</div><aside className="status-instrument"><div className="instrument-head"><span>SHIPCHECK STATUS</span><span className="live"><i /> LIVE</span></div><div className="ready-row"><Marker state="pass" /><span>{scanning ? 'SCAN IN PROGRESS' : 'SYSTEM READY'}</span></div><div className="instrument-meta"><span>LAST SCAN</span><strong>{lastScanLabel}</strong></div><div className="score-big">{score ?? '—'}<small>/100</small></div><div className="ready-label">{readyLabel} <span>✓</span></div><div className="score-bar"><span style={{ width: `${score ?? 0}%` }} /></div></aside></section>
 

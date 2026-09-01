@@ -18,13 +18,6 @@ export class ClientApiError extends Error {
   }
 }
 
-// Invoked on any 401 UNAUTHORIZED response so the app can redirect to /login.
-let unauthorizedHandler: (() => void) | null = null;
-
-export function setUnauthorizedHandler(handler: (() => void) | null): void {
-  unauthorizedHandler = handler;
-}
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
@@ -42,9 +35,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok || !body.ok) {
     const code = body.error?.code ?? 'INTERNAL';
     const message = body.error?.message ?? `Request failed with status ${res.status}`;
-    if (res.status === 401 || code === 'UNAUTHORIZED') {
-      unauthorizedHandler?.();
-    }
     throw new ClientApiError(res.status, code, message);
   }
 
@@ -53,21 +43,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return body.data;
-}
-
-export async function getMe(): Promise<{ authenticated: boolean }> {
-  return request<{ authenticated: boolean }>('/api/auth/me');
-}
-
-export async function login(password: string): Promise<{ authenticated: boolean }> {
-  return request<{ authenticated: boolean }>('/api/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ password }),
-  });
-}
-
-export async function logout(): Promise<{ authenticated: boolean }> {
-  return request<{ authenticated: boolean }>('/api/auth/logout', { method: 'POST' });
 }
 
 export async function getFeed(): Promise<FeedData> {
