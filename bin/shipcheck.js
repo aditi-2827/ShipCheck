@@ -4,8 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
 
 const DEFAULT_SERVER_URL = 'http://localhost:3140';
+
+const PACKAGE_ROOT = path.resolve(__dirname, '..');
+const NEXT_BIN = path.join(PACKAGE_ROOT, 'node_modules', 'next', 'dist', 'bin', 'next');
 
 function getHomeDir() {
   return process.env.HOME || process.env.USERPROFILE || process.cwd();
@@ -37,7 +42,7 @@ function writeGlobalRc(data) {
   }
 }
 
-async function requestApi(serverUrl, apiPath, method = 'GET', body = null, cookie = null) {
+async function requestApi(serverUrl, apiPath, method = 'GET', body = null, cookie = null, token = null) {
   const url = new URL(apiPath, serverUrl);
   const isHttps = url.protocol === 'https:';
   const client = isHttps ? https : http;
@@ -51,6 +56,9 @@ async function requestApi(serverUrl, apiPath, method = 'GET', body = null, cooki
   }
   if (cookie) {
     headers['Cookie'] = cookie;
+  }
+  if (token) {
+    headers['x-shipcheck-token'] = token;
   }
 
   return new Promise((resolve, reject) => {
@@ -101,34 +109,174 @@ async function requestApi(serverUrl, apiPath, method = 'GET', body = null, cooki
   });
 }
 
+// Resolve how the CLI authenticates with the server. Priority:
+//   1. Boot token (SHIPCHECK_BOOT_TOKEN env when the CLI spawned the server, or
+//      the last token persisted to ~/.shipcheckrc by `shipcheck server`) sent as
+//      x-shipcheck-token.
+//   2. Persisted session cookie.
+//   3. Password login (SHIPCHECK_PASSWORD) -> gets a fresh session cookie.
+// Returns { token, cookie }; at least one is set on success.
 async function authenticate(serverUrl) {
-  const password = process.env.SHIPCHECK_PASSWORD;
   const globalRc = readGlobalRc();
+  const bootToken = process.env.SHIPCHECK_BOOT_TOKEN || globalRc.bootToken || null;
 
-  if (globalRc.sessionCookie) {
+  if (bootToken) {
     try {
-      const meRes = await requestApi(serverUrl, '/api/auth/me', 'GET', null, globalRc.sessionCookie);
-      if (meRes.statusCode === 200 && meRes.data && meRes.data.ok) {
-        return globalRc.sessionCookie;
+      const meRes = await requestApi(serverUrl, '/api/auth/me', 'GET', null, null, bootToken);
+      if (
+        meRes.statusCode === 200 &&
+        meRes.data &&
+        meRes.data.ok &&
+        meRes.data.data &&
+        meRes.data.data.authenticated
+      ) {
+        return { token: bootToken, cookie: null };
       }
     } catch {
       // Ignore
     }
   }
 
+  if (globalRc.sessionCookie) {
+    try {
+      const meRes = await requestApi(serverUrl, '/api/auth/me', 'GET', null, globalRc.sessionCookie);
+      if (
+        meRes.statusCode === 200 &&
+        meRes.data &&
+        meRes.data.ok &&
+        meRes.data.data &&
+        meRes.data.data.authenticated
+      ) {
+        return { token: null, cookie: globalRc.sessionCookie };
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  const password = process.env.SHIPCHECK_PASSWORD;
   if (password) {
     try {
       const loginRes = await requestApi(serverUrl, '/api/auth/login', 'POST', { password });
       if (loginRes.cookie) {
         writeGlobalRc({ sessionCookie: loginRes.cookie });
-        return loginRes.cookie;
+        return { token: null, cookie: loginRes.cookie };
       }
     } catch {
       // Ignore
     }
   }
 
-  return null;
+  return { token: null, cookie: null };
+}
+
+function parseArgs(args) {
+  const out = { command: args[0], flags: {}, positionals: [] };
+  for (let i = 1; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--dev') {
+      out.flags.dev = true;
+    } else if (arg === '--port') {
+      out.flags.port = Number(args[++i]);
+    } else if (arg === '--host') {
+      out.flags.host = args[++i];
+    } else {
+      out.positionals.push(arg);
+    }
+  }
+  return out;
+}
+
+function waitForServerReady(serverUrl, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const poll = async () => {
+      if (Date.now() > deadline) {
+        return reject(new Error('Timed out waiting for the ShipCheck server to start.'));
+      }
+      try {
+        const res = await requestApi(serverUrl, '/api/feed', 'GET');
+        if (res.statusCode === 200 && res.data && res.data.ok) {
+          return resolve(true);
+        }
+      } catch {
+        // Not up yet; keep polling.
+      }
+      setTimeout(poll, 400);
+    };
+    poll();
+  });
+}
+
+// `shipcheck server` - start the bundled Next.js server (production `next start`
+// unless --dev) with a boot token, print the clickable dashboard link, and stay
+// attached until the server exits.
+async function handleServer(flags) {
+  const dev = Boolean(flags.dev);
+  const port = Number(flags.port) || Number(process.env.SHIPCHECK_PORT) || 3140;
+  const host = flags.host || process.env.SHIPCHECK_HOST || '127.0.0.1';
+  const displayHost = host === '0.0.0.0' ? 'localhost' : host;
+  const baseUrl = `http://${displayHost}:${port}`;
+
+  const buildFile = path.join(PACKAGE_ROOT, '.next', 'BUILD_ID');
+  if (!dev && !fs.existsSync(buildFile)) {
+    throw new Error(
+      `Production build not found at ${path.join(PACKAGE_ROOT, '.next')}\n` +
+        `Run \`npm run build\` in ${PACKAGE_ROOT} first, or start in dev mode with \`shipcheck server --dev\`.`,
+    );
+  }
+  if (!fs.existsSync(NEXT_BIN)) {
+    throw new Error(`Next.js binary not found at ${NEXT_BIN}. Are the dependencies installed?`);
+  }
+
+  // Reuse the previous boot token when possible so links and `shipcheck init` /
+  // `shipcheck scan` keep working across server restarts on the same machine.
+  const bootToken = readGlobalRc().bootToken || crypto.randomBytes(32).toString('hex');
+  writeGlobalRc({ bootToken, serverUrl: baseUrl });
+
+  const mode = dev ? 'dev' : 'start';
+  const nextArgs = [NEXT_BIN, mode, '-p', String(port), '-H', host];
+  const child = spawn(process.execPath, nextArgs, {
+    cwd: PACKAGE_ROOT,
+    env: { ...process.env, SHIPCHECK_BOOT_TOKEN: bootToken },
+    stdio: 'inherit',
+  });
+
+  child.on('error', (err) => {
+    console.error(`\n✖ Failed to start Next.js: ${err.message}`);
+    process.exit(1);
+  });
+  child.on('exit', (code, signal) => {
+    if (signal) {
+      process.exit(0);
+    }
+    process.exit(code ?? 0);
+  });
+  process.on('SIGINT', () => child.kill('SIGINT'));
+  process.on('SIGTERM', () => child.kill('SIGTERM'));
+
+  await waitForServerReady(baseUrl, dev ? 60000 : 20000);
+
+  // Confirm our boot token is accepted; otherwise warn that an already running
+  // server (with a different token) is occupying the port.
+  let tokenOk = false;
+  try {
+    const meRes = await requestApi(baseUrl, '/api/auth/me', 'GET', null, null, bootToken);
+    tokenOk = meRes.statusCode === 200 && meRes.data && meRes.data.data && meRes.data.data.authenticated === true;
+  } catch {
+    tokenOk = false;
+  }
+
+  console.log('\nShipCheck server is running.\n');
+  console.log(`Dashboard:  ${baseUrl}/?token=${bootToken}`);
+  if (!tokenOk) {
+    console.log(
+      `\nWarning: this port is already serving a ShipCheck instance with a different token.\n` +
+        `Use a different port (\`shipcheck server --port N\`) or open the other instance's link.`,
+    );
+  }
+  console.log(`\nToken:      ${bootToken}`);
+  console.log('Tip: append ?token=<token> to a project link to open it directly.\n');
 }
 
 function findProjectConfig(dir) {
@@ -143,6 +291,7 @@ function findProjectConfig(dir) {
   return null;
 }
 
+// Register the current directory as a tracked project.
 async function handleInit() {
   const currentDir = process.cwd();
   const folderName = path.basename(currentDir);
@@ -152,9 +301,22 @@ async function handleInit() {
 
   console.log(`Registering project "${folderName}" with ShipCheck server (${serverUrl})...\n`);
 
-  const cookie = await authenticate(serverUrl);
+  const auth = await authenticate(serverUrl);
+  if (!auth.token && !auth.cookie) {
+    throw new Error(
+      'Authentication required. Start the server with `shipcheck server` and use its printed token, ' +
+        'or set SHIPCHECK_PASSWORD.',
+    );
+  }
 
-  const res = await requestApi(serverUrl, '/api/projects/init', 'POST', { name: folderName }, cookie);
+  const res = await requestApi(
+    serverUrl,
+    '/api/projects/init',
+    'POST',
+    { name: folderName, targetDir: currentDir },
+    auth.cookie,
+    auth.token,
+  );
   if (res.statusCode !== 201 && res.statusCode !== 200) {
     const msg = res.data && res.data.error ? res.data.error.message : `HTTP ${res.statusCode}`;
     throw new Error(`Project initialization failed: ${msg}`);
@@ -170,13 +332,15 @@ async function handleInit() {
 
   fs.writeFileSync(configFile, JSON.stringify(configContent, null, 2), 'utf8');
 
+  const dashSuffix = auth.token ? `?token=${auth.token}` : '';
   console.log('✓ Project registered');
   console.log(`Project:    ${project.name}`);
   console.log(`Project ID: ${project.id}\n`);
   console.log('Dashboard:');
-  console.log(`${serverUrl}/project/${project.id}`);
+  console.log(`${serverUrl}/project/${project.id}${dashSuffix}`);
 }
 
+// Analyze the current project against the running server.
 async function handleScan() {
   const currentDir = process.cwd();
   const config = findProjectConfig(currentDir);
@@ -193,7 +357,13 @@ async function handleScan() {
 
   console.log(`Scanning project... (${currentDir})\n`);
 
-  const cookie = await authenticate(serverUrl);
+  const auth = await authenticate(serverUrl);
+  if (!auth.token && !auth.cookie) {
+    throw new Error(
+      'Authentication required. Start the server with `shipcheck server` and use its printed token, ' +
+        'or set SHIPCHECK_PASSWORD.',
+    );
+  }
 
   const scanRes = await requestApi(
     serverUrl,
@@ -203,7 +373,8 @@ async function handleScan() {
       projectId,
       targetDir: currentDir,
     },
-    cookie,
+    auth.cookie,
+    auth.token,
   );
 
   if (scanRes.statusCode !== 201 && scanRes.statusCode !== 200) {
@@ -212,7 +383,8 @@ async function handleScan() {
   }
 
   const result = scanRes.data.data;
-  const dashboardUrl = `${serverUrl}/project/${projectId}`;
+  const dashSuffix = auth.token ? `?token=${auth.token}` : '';
+  const dashboardUrl = `${serverUrl}/project/${projectId}${dashSuffix}`;
   const durationSec = ((result.env?.durationMs || 0) / 1000).toFixed(1);
 
   console.log('SHIPCHECK');
@@ -269,19 +441,25 @@ async function handleScan() {
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  const command = args[0];
+  const { command, flags } = parseArgs(process.argv.slice(2));
 
   try {
-    if (command === 'init') {
+    if (command === 'server') {
+      await handleServer(flags);
+    } else if (command === 'init') {
       await handleInit();
     } else if (command === 'scan') {
       await handleScan();
     } else {
       console.log('ShipCheck CLI\n');
       console.log('Usage:');
-      console.log('  shipcheck init   - Register the current project with ShipCheck');
-      console.log('  shipcheck scan   - Analyze the current project');
+      console.log('  shipcheck server   - Start the ShipCheck server and print the dashboard link');
+      console.log('  shipcheck init     - Register the current project with ShipCheck');
+      console.log('  shipcheck scan     - Analyze the current project\n');
+      console.log('Server options:');
+      console.log('  --port N     Port to bind (default 3140, or SHIPCHECK_PORT)');
+      console.log('  --host H     Host to bind (default 127.0.0.1, or SHIPCHECK_HOST)');
+      console.log('  --dev        Run `next dev` instead of the production `next start`');
       process.exit(command ? 1 : 0);
     }
   } catch (err) {

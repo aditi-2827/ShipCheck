@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { getProject, initAuth, ClientApiError } from '@/lib/api';
 import type { Project, ScanResult } from '@/lib/types';
 
 type State = 'pass' | 'warning' | 'critical' | 'running' | 'pending';
@@ -161,25 +162,22 @@ export default function ProjectDashboard({ params }: { params: { id: string } })
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/projects/${params.id}`, { credentials: 'same-origin' });
-        if (!res.ok) {
+        initAuth();
+        const data = await getProject(params.id);
+        if (cancelled) return;
+        setProject(data.project);
+        const hist: ScanResult[] = data.history || [];
+        setHistory(hist);
+        if (hist.length > 0) {
+          setSelectedScanId(hist[0].id);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        if (err instanceof ClientApiError && err.status === 404) {
           setErrorMsg(`Project not found (${params.id})`);
-          return;
-        }
-        const body = await res.json();
-        if (cancelled) return;
-        if (body.ok && body.data) {
-          setProject(body.data.project);
-          const hist: ScanResult[] = body.data.history || [];
-          setHistory(hist);
-          if (hist.length > 0) {
-            setSelectedScanId(hist[0].id);
-          }
         } else {
-          setErrorMsg(body.error?.message || 'Failed to load project details');
+          setErrorMsg(err instanceof Error ? err.message : 'Failed to load project details');
         }
-      } catch {
-        if (cancelled) return;
       }
     })();
     return () => {

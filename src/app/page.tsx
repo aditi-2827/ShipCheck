@@ -5,6 +5,7 @@ import {
   getFeed,
   getHistory,
   runScan as apiRunScan,
+  initAuth,
   ClientApiError,
 } from '@/lib/api';
 import type { FeedData, ScanResult } from '@/lib/types';
@@ -49,6 +50,7 @@ export default function Home() {
     let cancelled = false;
     (async () => {
       try {
+        initAuth();
         const [f, h] = await Promise.all([getFeed(), getHistory()]);
         if (cancelled) return;
         setFeed(f);

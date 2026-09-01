@@ -7,6 +7,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
   try {
+    requireAuth(req);
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get('projectId');
     const history = projectId ? getHistoryByProject(projectId) : getHistory<ScanResult>();
