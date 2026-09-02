@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ESLint } from 'eslint';
 import type { CategoryResult, CheckSummary, Issue, ScanComparison, ScanOptions, ScanResult } from './types';
 import { appendHistory, getHistoryByProject, touchProject } from './store';
 import { FEED_DATA } from './data';
@@ -923,6 +924,378 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
     detail: hasRollbackConfig ? 'Rollback configuration found' : 'No rollback configuration (optional)',
   });
 
+  // --- Code Quality ---
+  const codeQualityIssues: Issue[] = [];
+  const cqChecks: CheckSummary[] = [];
+
+  const hasEslintConfig = [
+    '.eslintrc',
+    '.eslintrc.js',
+    '.eslintrc.cjs',
+    '.eslintrc.yaml',
+    '.eslintrc.yml',
+    '.eslintrc.json',
+    'eslint.config.js',
+    'eslint.config.mjs',
+    'eslint.config.cjs',
+  ].some((f) => fileExists(targetDir, f));
+  let hasPackageEslintConfig = false;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf8')) as { eslintConfig?: unknown };
+    hasPackageEslintConfig = Boolean(pkg.eslintConfig);
+  } catch {
+    // no package.json
+  }
+
+  if (hasEslintConfig || hasPackageEslintConfig) {
+    // Run the project's own ESLint config against its source.
+    try {
+      const eslint = new ESLint({ cwd: targetDir, errorOnUnmatchedPattern: false });
+      const results = await eslint.lintFiles(['**/*.{js,jsx,ts,tsx,mjs,cjs}']);
+      const totalErrors = results.reduce((sum, r) => sum + r.errorCount, 0);
+      const totalWarnings = results.reduce((sum, r) => sum + r.warningCount, 0);
+      if (totalErrors === 0 && totalWarnings === 0) {
+        cqChecks.push({ slug: 'eslint', name: 'ESLint', status: 'pass', detail: 'No lint errors or warnings' });
+      } else {
+        cqChecks.push({
+          slug: 'eslint',
+          name: 'ESLint',
+          status: totalErrors > 0 ? 'critical' : 'warning',
+          detail: `${totalErrors} error(s), ${totalWarnings} warning(s)`,
+        });
+        // Only surface a handful of representative findings as issues.
+        let reported = 0;
+        for (const r of results) {
+          if (reported >= 20) break;
+          for (const m of r.messages) {
+            if (reported >= 20) break;
+            const isError = m.severity === 2;
+            codeQualityIssues.push({
+              severity: isError ? 'critical' : 'warning',
+              title: m.ruleId ? `ESLint: ${m.ruleId}` : 'ESLint: parse error',
+              file: path.relative(targetDir, r.filePath),
+              line: m.line ?? null,
+              message: m.message,
+              fix: isError ? 'Fix the ESLint error reported for this file.' : 'Resolve the ESLint warning to keep the codebase clean.',
+            });
+            reported += 1;
+          }
+        }
+      }
+    } catch {
+      cqChecks.push({
+        slug: 'eslint',
+        name: 'ESLint',
+        status: 'warning',
+        detail: 'ESLint could not run against the project config',
+      });
+      codeQualityIssues.push({
+        severity: 'warning',
+        title: 'ESLint configuration could not run',
+        file: null,
+        line: null,
+        message: 'ShipCheck detected an ESLint config but could not execute it (missing plugins or config errors).',
+        fix: 'Ensure ESLint plugins referenced by the config are installed and the config is valid.',
+      });
+    }
+  } else {
+    cqChecks.push({
+      slug: 'eslint',
+      name: 'ESLint',
+      status: 'warning',
+      detail: 'No ESLint configuration found',
+    });
+    codeQualityIssues.push({
+      severity: 'warning',
+      title: 'No ESLint configuration',
+      file: null,
+      line: null,
+      message: 'The project has no ESLint configuration, so no code-quality linting could be performed.',
+      fix: 'Add an ESLint config (e.g. .eslintrc.json or eslint.config.js) to enable linting.',
+    });
+  }
+
+  // --- Deployment ---
+  const deployIssues: Issue[] = [];
+  const deployChecks: CheckSummary[] = [];
+
+  // Detect deployment platform config files
+  const DEPLOY_CONFIGS: { file: string; name: string; validate: (content: string) => string | null }[] = [
+    {
+      file: 'vercel.json',
+      name: 'Vercel',
+      validate: (content) => {
+        try {
+          const j = JSON.parse(content);
+          if (typeof j === 'object' && j !== null) return null;
+          return 'vercel.json must contain a JSON object';
+        } catch {
+          return 'vercel.json is not valid JSON';
+        }
+      },
+    },
+    {
+      file: 'netlify.toml',
+      name: 'Netlify',
+      validate: (content) => {
+        // Minimal TOML sanity: brackets for sections, key = value lines.
+        if (/\t/.test(content)) return 'netlify.toml uses tabs (invalid TOML)';
+        if (content.trim().length === 0) return 'netlify.toml is empty';
+        return null;
+      },
+    },
+    {
+      file: 'fly.toml',
+      name: 'Fly.io',
+      validate: (content) => (content.trim().length === 0 ? 'fly.toml is empty' : null),
+    },
+    {
+      file: 'railway.json',
+      name: 'Railway',
+      validate: (content) => {
+        try {
+          JSON.parse(content);
+          return null;
+        } catch {
+          return 'railway.json is not valid JSON';
+        }
+      },
+    },
+    {
+      file: 'Procfile',
+      name: 'Heroku/Procfile',
+      validate: (content) => {
+        if (content.trim().length === 0) return 'Procfile is empty';
+        if (!/^[A-Za-z0-9_]+:\s*\S+/m.test(content)) return 'Procfile has no valid process declarations';
+        return null;
+      },
+    },
+    {
+      file: 'app.json',
+      name: 'Heroku app.json',
+      validate: (content) => {
+        try {
+          const j = JSON.parse(content);
+          if (j && typeof j === 'object') return null;
+          return 'app.json must contain a JSON object';
+        } catch {
+          return 'app.json is not valid JSON';
+        }
+      },
+    },
+  ];
+
+  const presentDeploy = DEPLOY_CONFIGS.filter((c) => fileExists(targetDir, c.file));
+  if (presentDeploy.length === 0) {
+    deployChecks.push({
+      slug: 'deploy-platform',
+      name: 'Deployment Platform',
+      status: 'warning',
+      detail: 'No deployment config detected',
+    });
+    deployIssues.push({
+      severity: 'warning',
+      title: 'No deployment configuration found',
+      file: null,
+      line: null,
+      message: 'No Vercel, Netlify, Fly.io, Railway, or Procfile configuration was detected, so deployment is unverified.',
+      fix: 'Add a deployment config for your chosen platform, or confirm deployment is handled outside the repo.',
+    });
+  } else {
+    for (const cfg of presentDeploy) {
+      let content = '';
+      try {
+        content = fs.readFileSync(path.join(targetDir, cfg.file), 'utf8');
+      } catch {
+        // unreadable
+      }
+      const err = cfg.validate(content);
+      deployChecks.push({
+        slug: `deploy-${cfg.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+        name: cfg.name,
+        status: err ? 'warning' : 'pass',
+        detail: err ?? `${cfg.file} valid`,
+      });
+      if (err) {
+        deployIssues.push({
+          severity: 'warning',
+          title: `${cfg.name} config issue: ${err}`,
+          file: cfg.file,
+          line: null,
+          message: err,
+          fix: `Correct the ${cfg.name} configuration file.`,
+        });
+      }
+    }
+    deployChecks.push({
+      slug: 'deploy-platform',
+      name: 'Deployment Platform',
+      status: 'pass',
+      detail: `${presentDeploy.map((c) => c.name).join(', ')} detected`,
+    });
+  }
+
+  // --- Monitoring ---
+  const monitoringIssues: Issue[] = [];
+  const monChecks: CheckSummary[] = [];
+
+  const MONITORING_SIGNALS: { name: string; depPatterns: RegExp[]; fileSignals: RegExp[] }[] = [
+    {
+      name: 'Sentry',
+      depPatterns: [/@sentry\//],
+      fileSignals: [/Sentry\.init\(/],
+    },
+    {
+      name: 'LogRocket',
+      depPatterns: [/logrocket/],
+      fileSignals: [/LogRocket\.init\(/],
+    },
+    {
+      name: 'Datadog',
+      depPatterns: [/@datadog\//, /datadog-logs/, /dd-trace/],
+      fileSignals: [/datadog/i, /DD_API_KEY/i],
+    },
+  ];
+
+  let monitoringFound = false;
+  let monToken = '';
+
+  // 1) package.json dependencies
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const allDeps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+    const depKeys = Object.keys(allDeps);
+    for (const sig of MONITORING_SIGNALS) {
+      for (const dp of sig.depPatterns) {
+        if (depKeys.some((k) => dp.test(k))) {
+          monitoringFound = true;
+          monToken = sig.name;
+          break;
+        }
+      }
+      if (monitoringFound) break;
+    }
+  } catch {
+    // no package.json
+  }
+
+  // 2) React error boundary + monitoring file signals (if not found via deps)
+  const monWalk = (dir: string): boolean => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      if (WS_EXCLUDE_DIRS.has(entry.name)) continue;
+      if (entry.name.startsWith('.env')) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (monWalk(full)) return true;
+      } else if (/\.(ts|tsx|js|jsx)$/.test(entry.name)) {
+        let content: string;
+        try {
+          content = fs.readFileSync(full, 'utf8');
+        } catch {
+          continue;
+        }
+        for (const sig of MONITORING_SIGNALS) {
+          for (const fsig of sig.fileSignals) {
+            if (fsig.test(content)) {
+              monitoringFound = true;
+              monToken = sig.name;
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  };
+  if (!monitoringFound) monWalk(targetDir);
+
+  // 3) React error boundary
+  let hasErrorBoundary = false;
+  if (!monitoringFound) {
+    const boundaryWalk = (dir: string): boolean => {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return false;
+      }
+      for (const entry of entries) {
+        if (WS_EXCLUDE_DIRS.has(entry.name)) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (boundaryWalk(full)) return true;
+        } else if (/\.(tsx|jsx)$/.test(entry.name)) {
+          let content: string;
+          try {
+            content = fs.readFileSync(full, 'utf8');
+          } catch {
+            continue;
+          }
+          if (/\bcomponentDidCatch\b/.test(content) || /\bgetDerivedStateFromError\b/.test(content)) {
+            hasErrorBoundary = true;
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    hasErrorBoundary = boundaryWalk(targetDir);
+  }
+
+  if (monitoringFound) {
+    monChecks.push({
+      slug: 'monitoring-provider',
+      name: 'Monitoring Provider',
+      status: 'pass',
+      detail: `${monToken} detected`,
+    });
+  } else if (hasErrorBoundary) {
+    monChecks.push({
+      slug: 'monitoring-provider',
+      name: 'Monitoring Provider',
+      status: 'warning',
+      detail: 'No monitoring SDK found, but an error boundary exists',
+    });
+    monitoringIssues.push({
+      severity: 'warning',
+      title: 'No error-monitoring SDK detected',
+      file: null,
+      line: null,
+      message: 'An error boundary exists but no error-monitoring service (Sentry, LogRocket, etc.) is configured.',
+      fix: 'Wire errors into a monitoring service (e.g. Sentry) to capture production failures.',
+    });
+  } else {
+    monChecks.push({
+      slug: 'monitoring-provider',
+      name: 'Monitoring Provider',
+      status: 'warning',
+      detail: 'No monitoring/error-boundary detection',
+    });
+    monitoringIssues.push({
+      severity: 'warning',
+      title: 'No monitoring or error handling detected',
+      file: null,
+      line: null,
+      message: 'No error-monitoring SDK or React error boundary was found.',
+      fix: 'Add an error-monitoring service (e.g. Sentry) and/or React error boundaries.',
+    });
+  }
+  monChecks.push({
+    slug: 'error-boundary',
+    name: 'Error Boundary',
+    status: hasErrorBoundary ? 'pass' : 'warning',
+    detail: hasErrorBoundary ? 'React error boundary detected' : 'No React error boundary detected',
+  });
+
   // --- Security ---
   const secretIssues = scanForSecrets(targetDir);
   const envIssues = envExampleCheck(targetDir);
@@ -1004,14 +1377,14 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
     toCategory({ slug: 'dependencies', name: 'Dependencies', checks: depChecks, issues: auditIssues }),
     toCategory({ slug: 'build', name: 'Build', checks: buildChecks, issues: buildIssues }),
     toCategory({ slug: 'tests', name: 'Tests', checks: testChecks, issues: testIssues }),
-    toCategory({ slug: 'code_quality', name: 'Code Quality', checks: [{ slug: 'code-quality', name: 'Coming in Phase 2', status: 'pass', detail: 'ESLint integration planned' }], issues: [] }),
+    toCategory({ slug: 'code_quality', name: 'Code Quality', checks: cqChecks, issues: codeQualityIssues }),
     toCategory({ slug: 'docker', name: 'Docker', checks: dockerChecks, issues: dockerIssues }),
     toCategory({ slug: 'database', name: 'Database', checks: databaseChecks, issues: dbIssues }),
     toCategory({ slug: 'ci_cd', name: 'CI/CD', checks: ciCdChecks, issues: ciCdIssues }),
-    toCategory({ slug: 'deployment', name: 'Deployment', checks: [{ slug: 'deployment', name: 'Coming in Phase 2', status: 'pass', detail: 'Config validation planned' }], issues: [] }),
+    toCategory({ slug: 'deployment', name: 'Deployment', checks: deployChecks, issues: deployIssues }),
     toCategory({ slug: 'security', name: 'Security', checks: securityChecks, issues: securityIssues }),
     toCategory({ slug: 'rollback', name: 'Rollback', checks: rollbackChecks, issues: rollbackIssues }),
-    toCategory({ slug: 'monitoring', name: 'Monitoring', checks: [{ slug: 'monitoring', name: 'Coming in Phase 2', status: 'pass', detail: 'Sentry/error-boundary detection planned' }], issues: [] }),
+    toCategory({ slug: 'monitoring', name: 'Monitoring', checks: monChecks, issues: monitoringIssues }),
     toCategory({ slug: 'api_check', name: 'API Check', checks: [{ slug: 'api-check', name: 'Coming in Phase 3', status: 'pass', detail: 'HTTP probing planned' }], issues: [] }),
     toCategory({ slug: 'performance', name: 'Performance', checks: [{ slug: 'performance', name: 'Coming in Phase 3', status: 'pass', detail: 'Lighthouse integration planned' }], issues: [] }),
     toCategory({ slug: 'post_deployment', name: 'Post-Deploy', checks: [{ slug: 'post-deploy', name: 'Coming in Phase 3', status: 'pass', detail: 'Smoke testing planned' }], issues: [] }),
@@ -1029,6 +1402,9 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
     ...dbIssues,
     ...ciCdIssues,
     ...rollbackIssues,
+    ...codeQualityIssues,
+    ...deployIssues,
+    ...monitoringIssues,
   ];
 
   const blockers = issues.filter((i) => i.severity === 'critical').length;
