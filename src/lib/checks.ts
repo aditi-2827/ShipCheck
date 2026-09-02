@@ -1,5 +1,8 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { ESLint } from 'eslint';
 import type { CategoryResult, CheckSummary, Issue, ScanComparison, ScanOptions, ScanResult } from './types';
@@ -304,6 +307,69 @@ function packageJsonBuildScript(targetDir: string): boolean {
   return packageJsonScript(targetDir, 'build');
 }
 
+// Simple HTTP(S) GET probe using Node built-ins — no external HTTP client dep.
+// Returns the status code (or 0 on network/parse failure) and latency in ms.
+function probeUrl(url: string, timeoutMs = 10_000): Promise<{ status: number; ms: number; ok: boolean }> {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      resolve({ status: 0, ms: 0, ok: false });
+      return;
+    }
+
+    const finish = (status: number, ms: number, ok: boolean) => resolve({ status, ms, ok });
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.get(url, { timeout: timeoutMs }, (res) => {
+      res.resume();
+      finish(res.statusCode ?? 0, Date.now() - started, (res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 400);
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      finish(0, Date.now() - started, false);
+    });
+    req.on('error', () => {
+      finish(0, Date.now() - started, false);
+    });
+  });
+}
+
+// Run a Lighthouse audit against a URL using puppeteer's bundled Chromium.
+// Returns the performance score (0-100) or null if it could not run.
+async function runLighthouse(url: string): Promise<{ perf: number | null; lcp: number | null; detail: string }> {
+  try {
+    // Lazy-load heavy optional deps only when actually needed.
+    const puppeteer = (await import('puppeteer')).default;
+    const lighthouse = (await import('lighthouse')).default as (
+      url: string,
+      options: Record<string, unknown>,
+      config?: unknown,
+      page?: import('puppeteer').Page,
+    ) => Promise<{
+      lhr: {
+        categories?: { performance?: { score?: number | null } };
+        audits?: { 'largest-contentful-paint'?: { numericValue?: number } };
+      };
+    }>;
+
+    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+    try {
+      const page = await browser.newPage();
+      const { lhr } = await lighthouse(url, { onlyCategories: ['performance'], output: 'json', logLevel: 'silent' }, undefined, page);
+      const perf = lhr.categories?.performance?.score != null ? Math.round(lhr.categories.performance.score * 100) : null;
+      const lcpNumeric = lhr.audits?.['largest-contentful-paint']?.numericValue;
+      const lcp = lcpNumeric != null ? Math.round(lcpNumeric) : null;
+      return { perf, lcp, detail: perf !== null ? `Lighthouse performance: ${perf}/100${lcp ? ` (LCP ${lcp}ms)` : ''}` : 'Lighthouse returned no performance score' };
+    } finally {
+      await browser.close();
+    }
+  } catch {
+    return { perf: null, lcp: null, detail: 'Lighthouse could not run (browser or target unreachable)' };
+  }
+}
+
 interface CategoryInput {
   slug: string;
   name: string;
@@ -390,9 +456,11 @@ export async function runScan(targetDir: string = process.cwd(), projectId?: str
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- deployUrl consumed by Phase 3 checks
-async function scanBody(targetDir: string, projectId: string | undefined, signal: AbortSignal, _options?: ScanOptions): Promise<ScanResult> {
+async function scanBody(targetDir: string, projectId: string | undefined, signal: AbortSignal, options?: ScanOptions): Promise<ScanResult> {
   const started = Date.now();
+  // Used by Phase 3 checks (API Check, Performance, Post-Deployment). When unset
+  // those checks render as pass-status placeholders.
+  const deployUrl = options?.deployUrl?.trim() || undefined;
 
   // --- Environment ---
   const nodeRes = await runCommand(['node', '--version'], { timeoutMs: 10_000, signal, cwd: targetDir });
@@ -489,8 +557,19 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
   ];
 
   // --- Dependencies / Build / Tests ---
-  const { auditIssues, depSummary, depStatus, buildIssues, buildStatus, buildSummary, testIssues, testStatus, testSummary } =
-    await withTempWorkspace(targetDir, async (ws) => {
+  const {
+    auditIssues,
+    depSummary,
+    depStatus,
+    buildIssues,
+    buildStatus,
+    buildSummary,
+    testIssues,
+    testStatus,
+    testSummary,
+    bundleBytes,
+    bundleFiles,
+  } = await withTempWorkspace(targetDir, async (ws) => {
       const auditIssues: Issue[] = [];
       let depSummary = 'not run';
       let depStatus: CheckSummary['status'] = 'pass';
@@ -599,7 +678,36 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
         });
       }
 
-      return { auditIssues, depSummary, depStatus, buildIssues, buildStatus, buildSummary, testIssues, testStatus, testSummary };
+      // Bundle-size analysis from the build output (.next/static/chunks).
+      let bundleBytes = 0;
+      let bundleFiles = 0;
+      const staticChunks = path.join(ws.dir, '.next', 'static', 'chunks');
+      if (fs.existsSync(staticChunks)) {
+        const walk = (dir: string): void => {
+          let entries: fs.Dirent[];
+          try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+          } catch {
+            return;
+          }
+          for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              walk(full);
+            } else if (/\.(js|css)$/.test(entry.name)) {
+              try {
+                bundleBytes += fs.statSync(full).size;
+                bundleFiles += 1;
+              } catch {
+                // ignore
+              }
+            }
+          }
+        };
+        walk(staticChunks);
+      }
+
+      return { auditIssues, depSummary, depStatus, buildIssues, buildStatus, buildSummary, testIssues, testStatus, testSummary, bundleBytes, bundleFiles };
     });
 
   const depChecks: CheckSummary[] = [
@@ -1296,6 +1404,118 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
     detail: hasErrorBoundary ? 'React error boundary detected' : 'No React error boundary detected',
   });
 
+  // --- API Check (Phase 3) ---
+  const apiIssues: Issue[] = [];
+  const apiChecks: CheckSummary[] = [];
+  if (deployUrl) {
+    const endpoints = [deployUrl, `${deployUrl.replace(/\/$/, '')}/api/health`, `${deployUrl.replace(/\/$/, '')}/api/status`];
+    const seen = new Set<string>();
+    let probeFailures = 0;
+    let probeTotal = 0;
+    for (const endpoint of endpoints) {
+      if (seen.has(endpoint)) continue;
+      seen.add(endpoint);
+      probeTotal += 1;
+      const probe = await probeUrl(endpoint, 10_000);
+      const host = new URL(endpoint).host;
+      if (probe.ok) {
+        apiChecks.push({ slug: `api-${probeTotal}`, name: `GET ${host}`, status: 'pass', detail: `HTTP ${probe.status} in ${probe.ms}ms` });
+      } else {
+        probeFailures += 1;
+        apiChecks.push({ slug: `api-${probeTotal}`, name: `GET ${host}`, status: probe.status ? 'warning' : 'critical', detail: probe.status ? `HTTP ${probe.status} in ${probe.ms}ms` : `Unreachable (${probe.ms}ms)` });
+        apiIssues.push({
+          severity: probe.status ? 'warning' : 'critical',
+          title: `API endpoint not healthy: ${host}`,
+          file: null,
+          line: null,
+          message: `Probing ${endpoint} returned ${probe.status ? `HTTP ${probe.status}` : 'no response'} in ${probe.ms}ms.`,
+          fix: 'Ensure the deployed application responds with a success status on this endpoint.',
+        });
+      }
+    }
+    if (probeFailures === 0) {
+      apiChecks.push({ slug: 'api-summary', name: 'API Health', status: 'pass', detail: `${probeTotal} endpoint(s) healthy` });
+    } else {
+      apiChecks.push({ slug: 'api-summary', name: 'API Health', status: probeFailures === probeTotal ? 'critical' : 'warning', detail: `${probeFailures}/${probeTotal} endpoint(s) unhealthy` });
+    }
+  } else {
+    apiChecks.push({ slug: 'api-placeholder', name: 'API Check', status: 'pass', detail: 'Set a deploy URL to enable HTTP probing' });
+  }
+
+  // --- Post-Deployment (Phase 3) ---
+  const postDeployIssues: Issue[] = [];
+  const postDeployChecks: CheckSummary[] = [];
+  if (deployUrl) {
+    const smoke = await probeUrl(deployUrl, 15_000);
+    if (smoke.ok && smoke.ms <= 5000) {
+      postDeployChecks.push({ slug: 'post-deploy-smoke', name: 'Smoke Test', status: 'pass', detail: `HTTP ${smoke.status} in ${smoke.ms}ms` });
+    } else if (smoke.ok) {
+      postDeployChecks.push({ slug: 'post-deploy-smoke', name: 'Smoke Test', status: 'warning', detail: `HTTP ${smoke.status} but slow (${smoke.ms}ms)` });
+      postDeployIssues.push({
+        severity: 'warning',
+        title: 'Deployment responds slowly',
+        file: null,
+        line: null,
+        message: `The deployed app responded with HTTP ${smoke.status} but took ${smoke.ms}ms (>5s).`,
+        fix: 'Investigate slow start-up or cold-start latency in the deployed application.',
+      });
+    } else {
+      postDeployChecks.push({ slug: 'post-deploy-smoke', name: 'Smoke Test', status: 'critical', detail: smoke.status ? `HTTP ${smoke.status}` : `Unreachable (${smoke.ms}ms)` });
+      postDeployIssues.push({
+        severity: 'critical',
+        title: 'Deployed application is not responding',
+        file: null,
+        line: null,
+        message: `Smoke-testing ${deployUrl} failed (${smoke.status ? `HTTP ${smoke.status}` : 'no response'} in ${smoke.ms}ms).`,
+        fix: 'Verify the deployment is live and reachable.',
+      });
+    }
+  } else {
+    postDeployChecks.push({ slug: 'post-deploy-placeholder', name: 'Smoke Test', status: 'pass', detail: 'Set a deploy URL to enable smoke testing' });
+  }
+
+  // --- Performance (Phase 3) ---
+  const perfIssues: Issue[] = [];
+  const perfChecks: CheckSummary[] = [];
+  // Bundle-size analysis (always available from the build output).
+  if (bundleFiles > 0) {
+    const sizeMb = (bundleBytes / (1024 * 1024)).toFixed(2);
+    perfChecks.push({ slug: 'bundle-size', name: 'Bundle Size', status: bundleBytes > 5 * 1024 * 1024 ? 'warning' : 'pass', detail: `${sizeMb} MB across ${bundleFiles} JS/CSS file(s)` });
+    if (bundleBytes > 5 * 1024 * 1024) {
+      perfIssues.push({
+        severity: 'warning',
+        title: 'Large JavaScript/CSS bundle',
+        file: null,
+        line: null,
+        message: `The production bundle totals ${sizeMb} MB. Large bundles slow initial page load.`,
+        fix: 'Code-split, lazy-load, and remove unused dependencies to reduce bundle size.',
+      });
+    }
+  } else {
+    perfChecks.push({ slug: 'bundle-size', name: 'Bundle Size', status: 'warning', detail: 'No build output to analyze' });
+  }
+  // Lighthouse audit (only when a deploy URL is set).
+  if (deployUrl) {
+    const lh = await runLighthouse(deployUrl);
+    if (lh.perf !== null) {
+      perfChecks.push({ slug: 'lighthouse', name: 'Lighthouse', status: lh.perf >= 90 ? 'pass' : lh.perf >= 50 ? 'warning' : 'critical', detail: lh.detail });
+      if (lh.perf < 90) {
+        perfIssues.push({
+          severity: lh.perf >= 50 ? 'warning' : 'critical',
+          title: `Lighthouse performance below 90 (${lh.perf}/100)`,
+          file: null,
+          line: null,
+          message: lh.detail,
+          fix: 'Improve performance (reduce bundle size, optimize images, minimize blocking time).',
+        });
+      }
+    } else {
+      perfChecks.push({ slug: 'lighthouse', name: 'Lighthouse', status: 'warning', detail: lh.detail });
+    }
+  } else {
+    perfChecks.push({ slug: 'lighthouse-placeholder', name: 'Lighthouse', status: 'pass', detail: 'Set a deploy URL to enable Lighthouse audit' });
+  }
+
   // --- Security ---
   const secretIssues = scanForSecrets(targetDir);
   const envIssues = envExampleCheck(targetDir);
@@ -1385,9 +1605,9 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
     toCategory({ slug: 'security', name: 'Security', checks: securityChecks, issues: securityIssues }),
     toCategory({ slug: 'rollback', name: 'Rollback', checks: rollbackChecks, issues: rollbackIssues }),
     toCategory({ slug: 'monitoring', name: 'Monitoring', checks: monChecks, issues: monitoringIssues }),
-    toCategory({ slug: 'api_check', name: 'API Check', checks: [{ slug: 'api-check', name: 'Coming in Phase 3', status: 'pass', detail: 'HTTP probing planned' }], issues: [] }),
-    toCategory({ slug: 'performance', name: 'Performance', checks: [{ slug: 'performance', name: 'Coming in Phase 3', status: 'pass', detail: 'Lighthouse integration planned' }], issues: [] }),
-    toCategory({ slug: 'post_deployment', name: 'Post-Deploy', checks: [{ slug: 'post-deploy', name: 'Coming in Phase 3', status: 'pass', detail: 'Smoke testing planned' }], issues: [] }),
+    toCategory({ slug: 'api_check', name: 'API Check', checks: apiChecks, issues: apiIssues }),
+    toCategory({ slug: 'performance', name: 'Performance', checks: perfChecks, issues: perfIssues }),
+    toCategory({ slug: 'post_deployment', name: 'Post-Deploy', checks: postDeployChecks, issues: postDeployIssues }),
   ];
 
   const issues: Issue[] = [
@@ -1405,6 +1625,9 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
     ...codeQualityIssues,
     ...deployIssues,
     ...monitoringIssues,
+    ...apiIssues,
+    ...perfIssues,
+    ...postDeployIssues,
   ];
 
   const blockers = issues.filter((i) => i.severity === 'critical').length;
