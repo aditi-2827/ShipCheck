@@ -389,9 +389,8 @@ export async function runScan(targetDir: string = process.cwd(), projectId?: str
   }
 }
 
-async function scanBody(targetDir: string, projectId: string | undefined, signal: AbortSignal, options?: ScanOptions): Promise<ScanResult> {
-  // options.deployUrl will be used by Phase 3 checks (API, Performance, Post-Deploy)
-  void options;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- deployUrl consumed by Phase 3 checks
+async function scanBody(targetDir: string, projectId: string | undefined, signal: AbortSignal, _options?: ScanOptions): Promise<ScanResult> {
   const started = Date.now();
 
   // --- Environment ---
