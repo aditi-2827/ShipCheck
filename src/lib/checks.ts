@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { CategoryResult, CheckSummary, Issue, ScanComparison, ScanResult } from './types';
+import type { CategoryResult, CheckSummary, Issue, ScanComparison, ScanOptions, ScanResult } from './types';
 import { appendHistory, getHistoryByProject, touchProject } from './store';
 import { FEED_DATA } from './data';
 import { ApiError } from './http';
@@ -346,7 +346,7 @@ function computeScore(categories: CategoryResult[]): number {
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
-export async function runScan(targetDir: string = process.cwd(), projectId?: string): Promise<ScanResult> {
+export async function runScan(targetDir: string = process.cwd(), projectId?: string, options?: ScanOptions): Promise<ScanResult> {
   if (activeScan) {
     throw new ApiError('CONFLICT', 'A scan is already running. Wait for it to finish.', 409);
   }
@@ -354,7 +354,7 @@ export async function runScan(targetDir: string = process.cwd(), projectId?: str
   const controller = new AbortController();
   const deadlineTimer = setTimeout(() => controller.abort(), SCAN_GLOBAL_DEADLINE_MS);
   try {
-    const result = await scanBody(targetDir, projectId, controller.signal);
+    const result = await scanBody(targetDir, projectId, controller.signal, options);
     if (controller.signal.aborted) {
       throw new ApiError('SCAN_FAILED', 'Scan exceeded the global time limit', 503);
     }
@@ -389,7 +389,9 @@ export async function runScan(targetDir: string = process.cwd(), projectId?: str
   }
 }
 
-async function scanBody(targetDir: string, projectId: string | undefined, signal: AbortSignal): Promise<ScanResult> {
+async function scanBody(targetDir: string, projectId: string | undefined, signal: AbortSignal, options?: ScanOptions): Promise<ScanResult> {
+  // options.deployUrl will be used by Phase 3 checks (API, Performance, Post-Deploy)
+  void options;
   const started = Date.now();
 
   // --- Environment ---
@@ -426,6 +428,43 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
       fix: 'Review, commit, or intentionally exclude the modified files before deployment.',
     });
   }
+
+  // .gitignore validation
+  const hasGitignore = fileExists(targetDir, '.gitignore');
+  if (!hasGitignore) {
+    gitIssues.push({
+      severity: 'warning',
+      title: 'No .gitignore file',
+      file: '.gitignore',
+      line: null,
+      message: 'The repository has no .gitignore file. Sensitive files, build artifacts, and dependencies may be tracked.',
+      fix: 'Create a .gitignore file listing files and directories that should not be version-controlled.',
+    });
+  } else {
+    let gitignoreContent: string;
+    try {
+      gitignoreContent = fs.readFileSync(path.join(targetDir, '.gitignore'), 'utf8');
+    } catch {
+      gitignoreContent = '';
+    }
+    const missing: string[] = [];
+    const required = ['node_modules', '.env', '.env.local', '.next'];
+    for (const entry of required) {
+      if (!gitignoreContent.includes(entry)) {
+        missing.push(entry);
+      }
+    }
+    if (missing.length > 0) {
+      gitIssues.push({
+        severity: 'warning',
+        title: '.gitignore is missing critical entries',
+        file: '.gitignore',
+        line: null,
+        message: `.gitignore does not exclude: ${missing.join(', ')}. These may be committed to the repository.`,
+        fix: `Add ${missing.map((m) => `"${m}"`).join(', ')} to .gitignore.`,
+      });
+    }
+  }
   const gitChecks: CheckSummary[] = [
     {
       slug: 'branch',
@@ -440,6 +479,12 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
       detail: clean
         ? 'Working tree is clean'
         : `${(statusRes.stdout || '').split(/\r?\n/).filter((l) => l.trim()).length} path(s) modified/untracked`,
+    },
+    {
+      slug: 'gitignore',
+      name: '.gitignore',
+      status: hasGitignore ? 'pass' : 'warning',
+      detail: hasGitignore ? '.gitignore present' : 'No .gitignore file found',
     },
   ];
 
@@ -594,10 +639,344 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
     { slug: 'docker', name: 'Docker', status: dockerStatus, detail: dockerSummary },
   ];
 
+  // --- Database ---
+  const dbIssues: Issue[] = [];
+  const dbChecks: CheckSummary[] = [];
+
+  // Detect database framework from config files and dependencies
+  const DB_FRAMEWORKS: { name: string; configFiles: string[]; depPatterns: RegExp[] }[] = [
+    { name: 'Prisma', configFiles: ['prisma/schema.prisma', 'prisma/schema.ts'], depPatterns: [/@prisma\/client/] },
+    { name: 'Drizzle', configFiles: ['drizzle.config.ts', 'drizzle.config.js', 'drizzle.config.mjs'], depPatterns: [/drizzle-orm/, /drizzle-kit/] },
+    { name: 'Knex', configFiles: ['knexfile.js', 'knexfile.ts', 'knexfile.cjs', 'knexfile.mjs'], depPatterns: [/knex/] },
+    { name: 'Supabase', configFiles: ['supabase/config.toml'], depPatterns: [/@supabase\/supabase-js/] },
+  ];
+  const DB_DRIVERS: { name: string; depPatterns: RegExp[] }[] = [
+    { name: 'PostgreSQL', depPatterns: [/\bpg\b/, /postgres/, /node-postgres/] },
+    { name: 'MySQL', depPatterns: [/\bmysql2?\b/] },
+    { name: 'MongoDB', depPatterns: [/\bmongodb\b/, /mongoose/] },
+  ];
+
+  let detectedDb: string | null = null;
+  let hasDbConfig = false;
+
+  // Check config files
+  for (const fw of DB_FRAMEWORKS) {
+    for (const cf of fw.configFiles) {
+      if (fileExists(targetDir, cf)) {
+        detectedDb = fw.name;
+        hasDbConfig = true;
+        break;
+      }
+    }
+    if (hasDbConfig) break;
+  }
+
+  // Check package.json dependencies if config not found
+  if (!hasDbConfig) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf8')) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const allDeps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+      for (const fw of DB_FRAMEWORKS) {
+        for (const dp of fw.depPatterns) {
+          for (const dep of Object.keys(allDeps)) {
+            if (dp.test(dep)) {
+              detectedDb = fw.name;
+              hasDbConfig = true;
+              break;
+            }
+          }
+          if (hasDbConfig) break;
+        }
+        if (hasDbConfig) break;
+      }
+    } catch {
+      // No package.json or parse error
+    }
+  }
+
+  // Detect raw drivers
+  let detectedDriver: string | null = null;
+  if (!detectedDb) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf8')) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const allDeps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+      for (const dr of DB_DRIVERS) {
+        for (const dp of dr.depPatterns) {
+          for (const dep of Object.keys(allDeps)) {
+            if (dp.test(dep)) {
+              detectedDriver = dr.name;
+              break;
+            }
+          }
+          if (detectedDriver) break;
+        }
+        if (detectedDriver) break;
+      }
+    } catch {
+      // No package.json
+    }
+  }
+
+  const dbFramework = detectedDb ?? detectedDriver;
+  if (dbFramework) {
+    // Check for migration directory
+    const migrationDirs = ['migrations', 'prisma/migrations', 'drizzle/migrations', 'db/migrate'];
+    let hasMigrations = false;
+    for (const md of migrationDirs) {
+      if (fileExists(targetDir, md)) {
+        hasMigrations = true;
+        break;
+      }
+    }
+
+    dbChecks.push({
+      slug: 'db-framework',
+      name: 'Database Framework',
+      status: 'pass',
+      detail: `${dbFramework} detected`,
+    });
+    dbChecks.push({
+      slug: 'db-migrations',
+      name: 'Migrations',
+      status: hasMigrations ? 'pass' : 'warning',
+      detail: hasMigrations ? 'Migration directory found' : 'No migration directory detected',
+    });
+    if (!hasMigrations) {
+      dbIssues.push({
+        severity: 'warning',
+        title: 'No migration directory found',
+        file: null,
+        line: null,
+        message: `${dbFramework} is configured but no migration directory was found.`,
+        fix: 'Initialize a migrations directory for your database framework.',
+      });
+    }
+  } else {
+    dbChecks.push({
+      slug: 'db-framework',
+      name: 'Database Framework',
+      status: 'pass',
+      detail: 'No database framework detected',
+    });
+  }
+
+  const databaseChecks: CheckSummary[] = dbChecks;
+
+  // --- CI/CD ---
+  const ciCdIssues: Issue[] = [];
+  const CI_CONFIGS: { file: string; name: string }[] = [
+    { file: '.github/workflows', name: 'GitHub Actions' },
+    { file: '.gitlab-ci.yml', name: 'GitLab CI' },
+    { file: '.gitlab-ci.yaml', name: 'GitLab CI' },
+    { file: 'Jenkinsfile', name: 'Jenkins' },
+    { file: '.circleci/config.yml', name: 'CircleCI' },
+    { file: 'bitbucket-pipelines.yml', name: 'Bitbucket Pipelines' },
+    { file: '.travis.yml', name: 'Travis CI' },
+    { file: 'azure-pipelines.yml', name: 'Azure Pipelines' },
+  ];
+
+  let detectedCI: string | null = null;
+  let ciConfigValid = true;
+
+  for (const cfg of CI_CONFIGS) {
+    if (cfg.file.endsWith('.yml') || cfg.file.endsWith('.yaml')) {
+      if (fileExists(targetDir, cfg.file)) {
+        detectedCI = cfg.name;
+        // Basic YAML syntax check: look for common syntax errors
+        try {
+          const content = fs.readFileSync(path.join(targetDir, cfg.file), 'utf8');
+          // Check for tab indentation (common YAML error)
+          if (/\t/.test(content)) {
+            ciConfigValid = false;
+            ciCdIssues.push({
+              severity: 'warning',
+              title: `CI config contains tabs`,
+              file: cfg.file,
+              line: null,
+              message: `${cfg.name} configuration uses tabs for indentation, which is invalid YAML.`,
+              fix: 'Replace tabs with spaces in the YAML configuration.',
+            });
+          }
+          // Check for empty content
+          if (content.trim().length === 0) {
+            ciConfigValid = false;
+            ciCdIssues.push({
+              severity: 'warning',
+              title: `Empty CI config`,
+              file: cfg.file,
+              line: null,
+              message: `${cfg.name} configuration file is empty.`,
+              fix: 'Add pipeline configuration or remove the empty file.',
+            });
+          }
+        } catch {
+          // Read error
+        }
+        break;
+      }
+    } else if (cfg.file === 'Jenkinsfile') {
+      if (fileExists(targetDir, cfg.file)) {
+        detectedCI = cfg.name;
+        break;
+      }
+    } else {
+      // Directory check (e.g., .github/workflows, .circleci)
+      if (fs.existsSync(path.join(targetDir, cfg.file))) {
+        detectedCI = cfg.name;
+        // Check if directory has any YAML files
+        try {
+          const entries = fs.readdirSync(path.join(targetDir, cfg.file));
+          const yamlFiles = entries.filter((e) => e.endsWith('.yml') || e.endsWith('.yaml'));
+          if (yamlFiles.length === 0) {
+            ciConfigValid = false;
+            ciCdIssues.push({
+              severity: 'warning',
+              title: `Empty ${cfg.name} workflows directory`,
+              file: cfg.file,
+              line: null,
+              message: `The ${cfg.name} workflows directory exists but contains no workflow files.`,
+              fix: `Add workflow YAML files to ${cfg.file}/.`,
+            });
+          }
+        } catch {
+          // Read error
+        }
+        break;
+      }
+    }
+  }
+
+  const ciCdChecks: CheckSummary[] = [
+    {
+      slug: 'ci-provider',
+      name: 'CI Provider',
+      status: detectedCI ? 'pass' : 'warning',
+      detail: detectedCI ? `${detectedCI} detected` : 'No CI/CD configuration found',
+    },
+  ];
+  if (detectedCI) {
+    ciCdChecks.push({
+      slug: 'ci-config',
+      name: 'CI Config',
+      status: ciConfigValid ? 'pass' : 'warning',
+      detail: ciConfigValid ? `${detectedCI} configuration valid` : 'CI configuration has issues',
+    });
+  }
+
+  // --- Rollback ---
+  const rollbackIssues: Issue[] = [];
+  const rollbackChecks: CheckSummary[] = [];
+
+  // Check git tags for version tags
+  const tagsRes = await runCommand(['git', 'tag', '-l'], { timeoutMs: 10_000, signal, cwd: targetDir });
+  const tags = tagsRes.exitCode === 0
+    ? tagsRes.stdout.split(/\r?\n/).filter((t) => t.trim()).slice(0, 50)
+    : [];
+  const versionTags = tags.filter((t) => /^v?\d+\.\d+/.test(t));
+
+  if (tagsRes.exitCode !== 0) {
+    rollbackChecks.push({
+      slug: 'tags',
+      name: 'Version Tags',
+      status: 'pass',
+      detail: 'Not a git repository',
+    });
+  } else {
+    rollbackChecks.push({
+      slug: 'tags',
+      name: 'Version Tags',
+      status: versionTags.length > 0 ? 'pass' : 'warning',
+      detail: versionTags.length > 0
+        ? `${versionTags.length} version tag(s) found (latest: ${versionTags[versionTags.length - 1]})`
+        : 'No version tags found — previous versions may not be recoverable',
+    });
+    if (versionTags.length === 0) {
+      rollbackIssues.push({
+        severity: 'warning',
+        title: 'No version tags found',
+        file: null,
+        line: null,
+        message: 'The repository has no semantic version tags (v1.0.0, etc.). Rolling back to a specific version may be difficult.',
+        fix: 'Tag releases with semantic versions (e.g., `git tag v1.0.0`).',
+      });
+    }
+  }
+
+  // Check for backup/rollback config files
+  const rollbackConfigFiles = ['rollback.config.js', 'rollback.config.ts', '.rollback'];
+  let hasRollbackConfig = false;
+  for (const rf of rollbackConfigFiles) {
+    if (fileExists(targetDir, rf)) {
+      hasRollbackConfig = true;
+      break;
+    }
+  }
+  rollbackChecks.push({
+    slug: 'config',
+    name: 'Rollback Config',
+    status: 'pass',
+    detail: hasRollbackConfig ? 'Rollback configuration found' : 'No rollback configuration (optional)',
+  });
+
   // --- Security ---
   const secretIssues = scanForSecrets(targetDir);
   const envIssues = envExampleCheck(targetDir);
-  const securityIssues = [...secretIssues, ...envIssues];
+
+  // Detect console.log, console.debug, debugger statements in source
+  const debugIssues: Issue[] = [];
+  const debugPatterns: { name: string; pattern: RegExp }[] = [
+    { name: 'console.log', pattern: /\bconsole\.\s*log\s*\(/g },
+    { name: 'console.debug', pattern: /\bconsole\.\s*debug\s*\(/g },
+    { name: 'debugger', pattern: /\bdebugger\s*[;,]?/g },
+  ];
+  const debugWalk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (WS_EXCLUDE_DIRS.has(entry.name)) continue;
+      if (entry.name.startsWith('.env')) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        debugWalk(full);
+      } else if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(entry.name)) {
+        let content: string;
+        try {
+          content = fs.readFileSync(full, 'utf8');
+        } catch {
+          continue;
+        }
+        const rel = path.relative(targetDir, full);
+        for (const dp of debugPatterns) {
+          let match: RegExpExecArray | null;
+          dp.pattern.lastIndex = 0;
+          while ((match = dp.pattern.exec(content)) !== null) {
+            const line = content.slice(0, match.index).split(/\r?\n/).length;
+            debugIssues.push({
+              severity: 'warning',
+              title: `${dp.name} left in source`,
+              file: rel,
+              line,
+              message: `A \`${dp.name}\` statement was found in source code.`,
+              fix: `Remove the \`${dp.name}\` statement before deploying to production.`,
+            });
+          }
+        }
+      }
+    }
+  };
+  debugWalk(targetDir);
+
+  const securityIssues = [...secretIssues, ...envIssues, ...debugIssues];
   const secretFound = secretIssues.length > 0;
   const securityChecks: CheckSummary[] = [
     {
@@ -612,6 +991,12 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
       status: envIssues.length > 0 ? 'warning' : 'pass',
       detail: envIssues.length > 0 ? 'Required variables not declared' : 'Template complete',
     },
+    {
+      slug: 'debug-statements',
+      name: 'Debug statements',
+      status: debugIssues.length > 0 ? 'warning' : 'pass',
+      detail: debugIssues.length > 0 ? `${debugIssues.length} debug statement(s) found` : 'No debug statements detected',
+    },
   ];
 
   const categories: CategoryResult[] = [
@@ -620,8 +1005,17 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
     toCategory({ slug: 'dependencies', name: 'Dependencies', checks: depChecks, issues: auditIssues }),
     toCategory({ slug: 'build', name: 'Build', checks: buildChecks, issues: buildIssues }),
     toCategory({ slug: 'tests', name: 'Tests', checks: testChecks, issues: testIssues }),
+    toCategory({ slug: 'code_quality', name: 'Code Quality', checks: [{ slug: 'code-quality', name: 'Coming in Phase 2', status: 'pass', detail: 'ESLint integration planned' }], issues: [] }),
     toCategory({ slug: 'docker', name: 'Docker', checks: dockerChecks, issues: dockerIssues }),
+    toCategory({ slug: 'database', name: 'Database', checks: databaseChecks, issues: dbIssues }),
+    toCategory({ slug: 'ci_cd', name: 'CI/CD', checks: ciCdChecks, issues: ciCdIssues }),
+    toCategory({ slug: 'deployment', name: 'Deployment', checks: [{ slug: 'deployment', name: 'Coming in Phase 2', status: 'pass', detail: 'Config validation planned' }], issues: [] }),
     toCategory({ slug: 'security', name: 'Security', checks: securityChecks, issues: securityIssues }),
+    toCategory({ slug: 'rollback', name: 'Rollback', checks: rollbackChecks, issues: rollbackIssues }),
+    toCategory({ slug: 'monitoring', name: 'Monitoring', checks: [{ slug: 'monitoring', name: 'Coming in Phase 2', status: 'pass', detail: 'Sentry/error-boundary detection planned' }], issues: [] }),
+    toCategory({ slug: 'api_check', name: 'API Check', checks: [{ slug: 'api-check', name: 'Coming in Phase 3', status: 'pass', detail: 'HTTP probing planned' }], issues: [] }),
+    toCategory({ slug: 'performance', name: 'Performance', checks: [{ slug: 'performance', name: 'Coming in Phase 3', status: 'pass', detail: 'Lighthouse integration planned' }], issues: [] }),
+    toCategory({ slug: 'post_deployment', name: 'Post-Deploy', checks: [{ slug: 'post-deploy', name: 'Coming in Phase 3', status: 'pass', detail: 'Smoke testing planned' }], issues: [] }),
   ];
 
   const issues: Issue[] = [
@@ -632,6 +1026,10 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
     ...dockerIssues,
     ...gitIssues,
     ...auditIssues,
+    ...debugIssues,
+    ...dbIssues,
+    ...ciCdIssues,
+    ...rollbackIssues,
   ];
 
   const blockers = issues.filter((i) => i.severity === 'critical').length;

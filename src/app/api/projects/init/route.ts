@@ -13,7 +13,9 @@ export async function POST(req: Request) {
     if (!name) {
       throw new ApiError('BAD_REQUEST', 'Project name is required', 400);
     }
-    const project = createProject(name);
+    const rawDeployUrl = typeof body.deployUrl === 'string' ? body.deployUrl.trim() : '';
+    const deployUrl = rawDeployUrl || undefined;
+    const project = createProject(name, deployUrl);
     const origin = req.headers.get('origin') ?? req.headers.get('host') ?? 'http://localhost:3140';
     const baseUrl = origin.startsWith('http') ? origin : `http://${origin}`;
     const dashboardUrl = `${baseUrl}/project/${project.id}`;

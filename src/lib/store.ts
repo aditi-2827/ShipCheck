@@ -105,13 +105,14 @@ export function getProject(id: string): Project | null {
   return projects.find((p) => p.id === id) ?? null;
 }
 
-export function createProject(name: string): Project {
+export function createProject(name: string, deployUrl?: string): Project {
   const projects = getProjects();
   const now = new Date().toISOString();
   const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const newProject: Project = {
     id,
     name,
+    ...(deployUrl ? { deployUrl } : {}),
     createdAt: now,
     updatedAt: now,
   };

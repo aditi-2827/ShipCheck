@@ -13,6 +13,7 @@ export async function POST(req: Request) {
     requireAuth(req);
     let projectId: string | undefined;
     let targetDir: string = process.cwd();
+    let deployUrl: string | undefined;
 
     let body: Record<string, unknown> | undefined;
     try {
@@ -28,6 +29,14 @@ export async function POST(req: Request) {
         throw new ApiError('NOT_FOUND', `Project with ID ${pId} not found`, 404);
       }
       projectId = pId;
+      if (project.deployUrl) {
+        deployUrl = project.deployUrl;
+      }
+    }
+
+    // Allow overriding deployUrl from the scan request body
+    if (body && typeof body.deployUrl === 'string' && body.deployUrl.trim()) {
+      deployUrl = body.deployUrl.trim();
     }
 
     if (body && typeof body.targetDir === 'string' && body.targetDir.trim()) {
@@ -50,7 +59,7 @@ export async function POST(req: Request) {
       targetDir = trimmedDir;
     }
 
-    const result = await runScan(targetDir, projectId);
+    const result = await runScan(targetDir, projectId, { deployUrl });
     return okResponse(result, 201);
   } catch (err) {
     return errorResponse(err);

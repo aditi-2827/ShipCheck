@@ -186,6 +186,8 @@ function parseArgs(args) {
       out.flags.port = Number(args[++i]);
     } else if (arg === '--host') {
       out.flags.host = args[++i];
+    } else if (arg === '--deploy-url') {
+      out.flags.deployUrl = args[++i];
     } else {
       out.positionals.push(arg);
     }
@@ -340,12 +342,13 @@ function findProjectConfig(dir) {
 }
 
 // Register the current directory as a tracked project.
-async function handleInit() {
+async function handleInit(flags) {
   const currentDir = process.cwd();
   const folderName = path.basename(currentDir);
 
   const existingConfig = findProjectConfig(currentDir);
   const serverUrl = process.env.SHIPCHECK_SERVER_URL || existingConfig?.serverUrl || DEFAULT_SERVER_URL;
+  const deployUrl = flags.deployUrl || existingConfig?.deployUrl || undefined;
 
   console.log(`Registering project "${folderName}" with ShipCheck server (${serverUrl})...\n`);
 
@@ -361,7 +364,7 @@ async function handleInit() {
     serverUrl,
     '/api/projects/init',
     'POST',
-    { name: folderName, targetDir: currentDir },
+    { name: folderName, targetDir: currentDir, deployUrl },
     auth.cookie,
     auth.token,
   );
@@ -376,6 +379,7 @@ async function handleInit() {
     projectId: project.id,
     projectName: project.name,
     serverUrl,
+    ...(deployUrl ? { deployUrl } : {}),
   };
 
   fs.writeFileSync(configFile, JSON.stringify(configContent, null, 2), 'utf8');
@@ -383,8 +387,11 @@ async function handleInit() {
   const dashSuffix = auth.token ? `?token=${auth.token}` : '';
   console.log('✓ Project registered');
   console.log(`Project:    ${project.name}`);
-  console.log(`Project ID: ${project.id}\n`);
-  console.log('Dashboard:');
+  console.log(`Project ID: ${project.id}`);
+  if (deployUrl) {
+    console.log(`Deploy URL: ${deployUrl}`);
+  }
+  console.log('\nDashboard:');
   console.log(`${serverUrl}/project/${project.id}${dashSuffix}`);
 }
 
@@ -495,19 +502,21 @@ async function main() {
     if (command === 'server') {
       await handleServer(flags);
     } else if (command === 'init') {
-      await handleInit();
+      await handleInit(flags);
     } else if (command === 'scan') {
       await handleScan();
     } else {
       console.log('ShipCheck CLI\n');
       console.log('Usage:');
-      console.log('  shipcheck server   - Start the ShipCheck server and print the dashboard link');
-      console.log('  shipcheck init     - Register the current project with ShipCheck');
-      console.log('  shipcheck scan     - Analyze the current project\n');
+      console.log('  shipcheck server              - Start the ShipCheck server and print the dashboard link');
+      console.log('  shipcheck init                - Register the current project with ShipCheck');
+      console.log('  shipcheck scan                - Analyze the current project\n');
+      console.log('Init options:');
+      console.log('  --deploy-url URL              Set the deployed application URL for post-deployment checks\n');
       console.log('Server options:');
-      console.log('  --port N     Port to bind (default 3140, or SHIPCHECK_PORT)');
-      console.log('  --host H     Host to bind (default 127.0.0.1, or SHIPCHECK_HOST)');
-      console.log('  --dev        Run `next dev` instead of the production `next start`');
+      console.log('  --port N                      Port to bind (default 3140, or SHIPCHECK_PORT)');
+      console.log('  --host H                      Host to bind (default 127.0.0.1, or SHIPCHECK_HOST)');
+      console.log('  --dev                         Run `next dev` instead of the production `next start`');
       process.exit(command ? 1 : 0);
     }
   } catch (err) {

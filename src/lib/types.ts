@@ -28,8 +28,13 @@ export interface CheckSummary {
 export interface Project {
   id: string;
   name: string;
+  deployUrl?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ScanOptions {
+  deployUrl?: string;
 }
 
 export interface ScanComparison {
