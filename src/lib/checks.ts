@@ -340,23 +340,31 @@ function probeUrl(url: string, timeoutMs = 10_000): Promise<{ status: number; ms
 // Returns the performance score (0-100) or null if it could not run.
 async function runLighthouse(url: string): Promise<{ perf: number | null; lcp: number | null; detail: string }> {
   try {
-    // Lazy-load heavy optional deps only when actually needed.
-    const puppeteer = (await import('puppeteer')).default;
-    const lighthouse = (await import('lighthouse')).default as (
-      url: string,
-      options: Record<string, unknown>,
-      config?: unknown,
-      page?: import('puppeteer').Page,
-    ) => Promise<{
-      lhr: {
-        categories?: { performance?: { score?: number | null } };
-        audits?: { 'largest-contentful-paint'?: { numericValue?: number } };
-      };
-    }>;
-
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+    // Lazy-load heavy optional deps via runtime `require` (kept external from
+    // the webpack server bundle in next.config.mjs) only when actually needed.
+    const nodeRequire = createRequire(path.join(SERVER_ROOT, 'noop.js'));
+    const puppeteerNode = nodeRequire('puppeteer') as {
+      launch: (opts: Record<string, unknown>) => Promise<{
+        newPage: () => Promise<{ url: (url: string) => Promise<unknown> }>;
+        close: () => Promise<void>;
+      }>;
+    };
+    // Launch browser, then navigate page before handing to lighthouse.
+    const browser = await puppeteerNode.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
     try {
       const page = await browser.newPage();
+      await page.url(url);
+      const lighthouse = nodeRequire('lighthouse') as (
+        url: string,
+        options: Record<string, unknown>,
+        config?: unknown,
+        page?: unknown,
+      ) => Promise<{
+        lhr: {
+          categories?: { performance?: { score?: number | null } };
+          audits?: { 'largest-contentful-paint'?: { numericValue?: number } };
+        };
+      }>;
       const { lhr } = await lighthouse(url, { onlyCategories: ['performance'], output: 'json', logLevel: 'silent' }, undefined, page);
       const perf = lhr.categories?.performance?.score != null ? Math.round(lhr.categories.performance.score * 100) : null;
       const lcpNumeric = lhr.audits?.['largest-contentful-paint']?.numericValue;
