@@ -344,16 +344,11 @@ async function runLighthouse(url: string): Promise<{ perf: number | null; lcp: n
     // the webpack server bundle in next.config.mjs) only when actually needed.
     const nodeRequire = createRequire(path.join(SERVER_ROOT, 'noop.js'));
     const puppeteerNode = nodeRequire('puppeteer') as {
-      launch: (opts: Record<string, unknown>) => Promise<{
-        newPage: () => Promise<{ url: (url: string) => Promise<unknown> }>;
-        close: () => Promise<void>;
-      }>;
+      launch: (opts: Record<string, unknown>) => Promise<{ newPage: () => Promise<unknown>; close: () => Promise<void> }>;
     };
-    // Launch browser, then navigate page before handing to lighthouse.
     const browser = await puppeteerNode.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
     try {
       const page = await browser.newPage();
-      await page.url(url);
       const lighthouse = nodeRequire('lighthouse') as (
         url: string,
         options: Record<string, unknown>,
