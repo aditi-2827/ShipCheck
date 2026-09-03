@@ -2,7 +2,6 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { ESLint } from 'eslint';
 import type { CategoryResult, CheckSummary, Issue, ScanComparison, ScanOptions, ScanResult } from './types';
@@ -337,39 +336,23 @@ function probeUrl(url: string, timeoutMs = 10_000): Promise<{ status: number; ms
 }
 
 // Run a Lighthouse audit against a URL using puppeteer's bundled Chromium.
+// Runs as a standalone child Node process (scripts/lighthouse-run.cjs) so the
+// heavy puppeteer/lighthouse deps never enter the Next.js webpack bundle.
 // Returns the performance score (0-100) or null if it could not run.
 async function runLighthouse(url: string): Promise<{ perf: number | null; lcp: number | null; detail: string }> {
   try {
-    // Lazy-load heavy optional deps via runtime `require` (kept external from
-    // the webpack server bundle in next.config.mjs) only when actually needed.
-    const nodeRequire = createRequire(path.join(SERVER_ROOT, 'noop.js'));
-    const puppeteerNode = nodeRequire('puppeteer') as {
-      launch: (opts: Record<string, unknown>) => Promise<{ newPage: () => Promise<unknown>; close: () => Promise<void> }>;
-    };
-    const browser = await puppeteerNode.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+    const res = await runCommand(['node', 'scripts/lighthouse-run.cjs', url], { timeoutMs: 240_000 });
+    const line = (res.stdout ?? '').trim().split(/\r?\n/).pop() || '';
+    let parsed: { perf: number | null; lcp: number | null; detail?: string };
     try {
-      const page = await browser.newPage();
-      const lighthouse = nodeRequire('lighthouse') as (
-        url: string,
-        options: Record<string, unknown>,
-        config?: unknown,
-        page?: unknown,
-      ) => Promise<{
-        lhr: {
-          categories?: { performance?: { score?: number | null } };
-          audits?: { 'largest-contentful-paint'?: { numericValue?: number } };
-        };
-      }>;
-      const { lhr } = await lighthouse(url, { onlyCategories: ['performance'], output: 'json', logLevel: 'silent' }, undefined, page);
-      const perf = lhr.categories?.performance?.score != null ? Math.round(lhr.categories.performance.score * 100) : null;
-      const lcpNumeric = lhr.audits?.['largest-contentful-paint']?.numericValue;
-      const lcp = lcpNumeric != null ? Math.round(lcpNumeric) : null;
-      return { perf, lcp, detail: perf !== null ? `Lighthouse performance: ${perf}/100${lcp ? ` (LCP ${lcp}ms)` : ''}` : 'Lighthouse returned no performance score' };
-    } finally {
-      await browser.close();
+      parsed = JSON.parse(line);
+    } catch {
+      return { perf: null, lcp: null, detail: `Lighthouse runner produced no result${res.timedOut ? ' (timed out)' : ''}` };
     }
-  } catch {
-    return { perf: null, lcp: null, detail: 'Lighthouse could not run (browser or target unreachable)' };
+    return { perf: parsed.perf ?? null, lcp: parsed.lcp ?? null, detail: parsed.detail ?? 'Lighthouse result unavailable' };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { perf: null, lcp: null, detail: `Lighthouse failed: ${msg}` };
   }
 }
 

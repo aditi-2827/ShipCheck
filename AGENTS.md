@@ -33,7 +33,11 @@ Route Handlers under `src/app/api/`, shared logic in `src/lib/`. All server-side
 
   **Phase 1 + Phase 2 checks** (implemented): Git (branch, working-tree, `.gitignore` presence + critical entries), Database (detects Prisma/Drizzle/Knex/Supabase + raw pg/mysql/mongo drivers from config files or `package.json` deps; checks for a migration directory), CI/CD (detects GitHub Actions, GitLab CI, Jenkins, CircleCI, Bitbucket, Travis, Azure; validates YAML indentation + non-empty), Rollback (git version tags + optional rollback config), Security (secret scan + `.env.example` + **console.log/debugger detection**), Code Quality (**runs the project's own ESLint config** via the programmatic ESLint API, reports errors/warnings), Deployment (detects + validates Vercel/Netlify/Fly/Railway/Procfile/Heroku `app.json` configs), Monitoring (detects Sentry/LogRocket/Datadog from deps or source + React error boundaries).
 
-  **Planned (not yet implemented)**: API Check (HTTP probing, Phase 3), Performance (Lighthouse + bundle size, Phase 3), Post-Deployment (smoke test, Phase 3 — only runs when `deployUrl` is set). These render as pass-status placeholder checks until implemented. `runScan(targetDir, projectId?, options?)` accepts `options.deployUrl` (from the Project record or scan body) for Phase 3 checks. `@types/eslint` is a devDependency for the Code Quality ESLint integration.
+  **Phase 3 checks** (implemented — all gated on `options.deployUrl`, from the Project record or scan body; render as pass-status placeholders when no `deployUrl` is set):
+  - **API Check** (`api_check`): live HTTP probes via Node built-in `http`/`https` (`probeUrl` helper) against the deploy root, `{root}/api/health`, and `{root}/api/status`; flags any non-2xx/3xx and reports latency.
+  - **Post-Deployment** (`post_deployment`): smoke test — one GET to the deploy root, fails if non-2xx or > 5s latency.
+  - **Performance** (`performance`): `bundle-size` analyzes the (temp-workspace) build output's `.next/static/chunks` (warning if no build output); `lighthouse` runs a **full Lighthouse performance audit** (perf score + LCP) via `scripts/lighthouse-run.cjs`, a standalone CommonJS child process spawned through `runCommand(['node', ...])`. Because puppeteer/lighthouse are heavy and break Next's webpack static analysis, they are deliberately kept **out of the server bundle** and isolated in that child script (loaded from `node_modules` at runtime). Thresholds: perf ≥ 90 pass, 50–89 warning, < 50 critical.
+  - deps: `puppeteer` (bundled Chromium) + `lighthouse` are dev deps. `@types/eslint` is a devDependency for the Code Quality ESLint integration.
 - `src/lib/store.ts` — file-based JSON persistence under `.data/` (gitignored): scan history, auth secret, sessions. Swappable for a real DB later.
 - `src/lib/http.ts` — response envelope `{ ok:true, data } | { ok:false, error:{code,message,details?} }` and `ApiError`/`readJson`/`errorResponse` helpers.
 - `src/lib/auth.ts` — local session-cookie auth: password from `SHIPCHECK_PASSWORD` env, stored only as an scrypt hash (Node `crypto`), random session token in HttpOnly `SameSite=Strict` cookie.
@@ -60,6 +64,7 @@ All API routes declare `export const dynamic = 'force-dynamic'` to avoid prerend
 
 - **Command spawning:** in `checks.ts`, commands run via `exec` (shell) on Windows. `execFile` will fail on `npm`/`npx` because they are `.cmd` shims not resolved through PATH. Do not switch to `execFile` for npm commands on Windows.
 - Child-process commands are hard-coded literals (no user input), so shelling out is safe.
+- **Temp-workspace `node_modules` junction:** the scan's temp build/test workspace reuses `node_modules` via a Windows junction. Next.js **Turbopack** builds can fail inside such a workspace ("Symlink ... node_modules is invalid, it points out of the filesystem root") — a pre-existing Windows limitation, not a scan-engine regression. Webpack builds (the default) generally work.
 
 ## Frontend (`src/app/page.tsx`)
 
