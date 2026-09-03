@@ -28,8 +28,34 @@ The CLI is the primary entry point (see `bin/shipcheck.js`):
 Route Handlers under `src/app/api/`, shared logic in `src/lib/`. All server-side, no external services:
 
 - `src/lib/types.ts` — shared domain types (Issue, CategoryResult, ScanResult, FeedData, …).
-- `src/lib/data.ts` — static feed reference (`FEED_DATA`: categories, stages, thresholds).
-- `src/lib/checks.ts` — the real scan engine (`runScan`). Runs node/npm versions, `git status`/branch, `npm audit`, `npm run build`, `npm test`, docker presence, and a **local regex** secret scan + `.env.example` coverage. Persists each result via the store. The temp build/test workspace is a **full-tree copy** of the target (excluding `node_modules`, `.next`, `.git`, `.data`, `dist`, `build`, `.env*`; `node_modules` is reused via a Windows junction), so nested `src/` layouts (e.g. `app/`, monorepo sub-packages) work. Scoring is per-category **weighted** (`categoryWeights` in `data.ts`, single source of truth for weights and the 80/60 `thresholds`): a category with only warnings keeps half its weight, a critical category contributes 0. Build/tests with no `npm run <script>` configured are warnings ("No build script configured"), **not** criticals. `.env.example` checks make no assumptions about required variable names; the secret scan walks the whole tree (never `node_modules`/`.next`/`.env*`). **16 categories total** (weights sum to 100 in `data.ts`).
+- `src/lib/data.ts` — static feed reference (`FEED_DATA`: categories, stages, thresholds, `categoryWeights`). **Single source of truth** for weights (sum to **100**) and the 80/60 `thresholds`. Bumped `schemaVersion` to 4 when Phase 4 rebalanced the weights.
+
+  **All 16 categories, with Phase 4 weights (score contribution when healthy):**
+
+  | Category | slug | Weight | Phase |
+  |---|---|---|---|
+  | Security | `security` | 18 | 1 |
+  | Build | `build` | 15 | 1 |
+  | Tests | `tests` | 10 | 1 |
+  | Code Quality | `code_quality` | 8 | 2 |
+  | API Check | `api_check` | 8 | 3 |
+  | Deployment | `deployment` | 6 | 2 |
+  | Dependencies | `dependencies` | 6 | 1 |
+  | Post-Deploy | `post_deployment` | 5 | 3 |
+  | Performance | `performance` | 5 | 3 |
+  | Monitoring | `monitoring` | 4 | 2 |
+  | Database | `database` | 4 | 1 |
+  | Git | `git` | 4 | 1 |
+  | CI/CD | `ci_cd` | 3 | 1 |
+  | Docker | `docker` | 2 | 1 |
+  | Rollback | `rollback` | 1 | 1 |
+  | Environment | `environment` | 1 | 1 |
+
+  Weighting rationale (Phase 4): security + build stay dominant (blockers each lose all weight); tests/code-quality/API hold meaningful shares; "easy" heuristics (docker, rollback, environment, git) get the smallest shares so they can't inflate the score on their own.
+
+  **`deployUrl` flow:** a project may carry an optional `deployUrl` (set via `shipcheck init --deploy-url URL`, stored on the Project record, or passed per-scan in the `/api/scan` body as `deployUrl`). When set, Phase 3 checks (API Check, Post-Deploy, Performance/Lighthouse) run for real. When unset, those three render as pass-status **placeholders** ("Set a deploy URL to enable …"). `runScan(targetDir, projectId?, options?)` and `scanBody` read `options.deployUrl` (preferring a per-scan body override over the stored Project value).
+
+- `src/lib/checks.ts` — the real scan engine (`runScan`). Runs node/npm versions, `git status`/branch, `npm audit`, `npm run build`, `npm test`, docker presence, and a **local regex** secret scan + `.env.example` coverage. Persists each result via the store. The temp build/test workspace is a **full-tree copy** of the target (excluding `node_modules`, `.next`, `.git`, `.data`, `dist`, `build`, `.env*`; `node_modules` is reused via a Windows junction), so nested `src/` layouts (e.g. `app/`, monorepo sub-packages) work. Scoring is per-category **weighted** (`categoryWeights` in `data.ts`, a warning keeps half its weight, a critical category contributes 0). Build/tests with no `npm run <script>` configured are warnings ("No build script configured"), **not** criticals. `.env.example` checks make no assumptions about required variable names; the secret scan walks the whole tree (never `node_modules`/`.next`/`.env*`).
 
   **Phase 1 + Phase 2 checks** (implemented): Git (branch, working-tree, `.gitignore` presence + critical entries), Database (detects Prisma/Drizzle/Knex/Supabase + raw pg/mysql/mongo drivers from config files or `package.json` deps; checks for a migration directory), CI/CD (detects GitHub Actions, GitLab CI, Jenkins, CircleCI, Bitbucket, Travis, Azure; validates YAML indentation + non-empty), Rollback (git version tags + optional rollback config), Security (secret scan + `.env.example` + **console.log/debugger detection**), Code Quality (**runs the project's own ESLint config** via the programmatic ESLint API, reports errors/warnings), Deployment (detects + validates Vercel/Netlify/Fly/Railway/Procfile/Heroku `app.json` configs), Monitoring (detects Sentry/LogRocket/Datadog from deps or source + React error boundaries).
 

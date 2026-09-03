@@ -1,7 +1,7 @@
 import type { FeedData } from './types';
 
 export const FEED_DATA: FeedData = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   categories: [
     { slug: 'environment', name: 'Environment' },
     { slug: 'git', name: 'Git' },
@@ -45,14 +45,14 @@ export const FEED_DATA: FeedData = {
     warning: 60,
   },
   // Per-category influence on the overall ship score (weights sum to 100).
-  // Security and build remain dominant; softer signals get smaller shares.
+  // Security and build remain dominant; easy/soft signals get smaller shares.
   categoryWeights: {
-    security: 20,
+    security: 18,
     build: 15,
-    tests: 12,
+    tests: 10,
     code_quality: 8,
     api_check: 8,
-    deployment: 7,
+    deployment: 6,
     dependencies: 6,
     post_deployment: 5,
     performance: 5,
@@ -60,8 +60,8 @@ export const FEED_DATA: FeedData = {
     database: 4,
     git: 4,
     ci_cd: 3,
-    docker: 3,
-    rollback: 2,
+    docker: 2,
+    rollback: 1,
     environment: 1,
   },
 };

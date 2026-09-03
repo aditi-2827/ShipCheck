@@ -143,6 +143,19 @@ export function updateProject(project: Project): Project {
   return updated;
 }
 
+// Set (or clear) a project's deploy URL. Returns null if the project is unknown.
+export function setProjectDeployUrl(id: string, deployUrl?: string): Project | null {
+  const project = getProject(id);
+  if (!project) return null;
+  const updated: Project = { ...project };
+  if (deployUrl && deployUrl.trim()) {
+    updated.deployUrl = deployUrl.trim();
+  } else {
+    delete updated.deployUrl;
+  }
+  return updateProject(updated);
+}
+
 // --- Auth secret ---
 
 export function getAuthSecret(): AuthSecretRecord | null {
@@ -214,6 +227,7 @@ export const store = {
   createProject,
   touchProject,
   updateProject,
+  setProjectDeployUrl,
   getAuthSecret,
   setAuthSecret,
   getSession,

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getProject, initAuth, ClientApiError } from '@/lib/api';
+import { getProject, initAuth, updateProjectDeployUrl, ClientApiError } from '@/lib/api';
 import type { Project, ScanResult } from '@/lib/types';
 
 type State = 'pass' | 'warning' | 'critical' | 'running' | 'pending';
@@ -157,6 +157,9 @@ export default function ProjectDashboard({ params }: { params: { id: string } })
   const [history, setHistory] = useState<ScanResult[]>([]);
   const [selectedScanId, setSelectedScanId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
+  const [deployUrl, setDeployUrl] = useState('');
+  const [deployUrlDirty, setDeployUrlDirty] = useState(false);
+  const [deployUrlMsg, setDeployUrlMsg] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -166,6 +169,7 @@ export default function ProjectDashboard({ params }: { params: { id: string } })
         const data = await getProject(params.id);
         if (cancelled) return;
         setProject(data.project);
+        setDeployUrl(data.project.deployUrl ?? '');
         const hist: ScanResult[] = data.history || [];
         setHistory(hist);
         if (hist.length > 0) {
@@ -184,6 +188,18 @@ export default function ProjectDashboard({ params }: { params: { id: string } })
       cancelled = true;
     };
   }, [params.id]);
+
+  async function saveDeployUrl() {
+    setDeployUrlMsg('Saving…');
+    try {
+      const { project: updated } = await updateProjectDeployUrl(params.id, deployUrl.trim() || undefined);
+      setProject(updated);
+      setDeployUrlDirty(false);
+      setDeployUrlMsg(updated.deployUrl ? 'Deploy URL saved. Phase 3 checks will run on the next scan.' : 'Deploy URL cleared. Phase 3 checks will render as placeholders.');
+    } catch (err) {
+      setDeployUrlMsg(err instanceof Error ? `Save failed: ${err.message}` : 'Save failed');
+    }
+  }
 
   const latestScan = history[0] ?? null;
   const activeScan = history.find((s) => s.id === selectedScanId) ?? latestScan;
@@ -279,6 +295,65 @@ export default function ProjectDashboard({ params }: { params: { id: string } })
                     <span style={{ fontSize: '10px', color: '#71717a', textTransform: 'uppercase', fontFamily: 'monospace' }}>LAST SCAN</span>
                     <p style={{ margin: '2px 0 0', fontWeight: 600, fontSize: '13px', color: '#e4e4e7', fontFamily: 'monospace' }}>{lastScanAgo}</p>
                   </div>
+                  <div>
+                    <span style={{ fontSize: '10px', color: '#71717a', textTransform: 'uppercase', fontFamily: 'monospace' }}>DEPLOY URL</span>
+                    <p style={{ margin: '2px 0 0', fontWeight: 600, fontSize: '12px', color: project?.deployUrl ? '#36d9ff' : '#71717a', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '220px' }} title={project?.deployUrl}>
+                      {project?.deployUrl ?? 'not set — phase 3 disabled'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* PROJECT SETTINGS: DEPLOY URL */}
+                <div style={{ marginTop: '14px', background: '#121316', border: '1px solid #27272a', padding: '14px 16px', borderRadius: '4px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '10px', color: '#68727d', textTransform: 'uppercase', fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.1em' }}>DEPLOY URL SETTINGS</span>
+                    <span style={{ fontSize: '10px', fontFamily: 'monospace', color: project?.deployUrl ? '#10b981' : '#f59e0b' }}>
+                      {project?.deployUrl ? 'PHASE 3 CHECKS ENABLED' : 'PHASE 3 CHECKS DISABLED'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <input
+                      type="url"
+                      placeholder="https://your-app.example.com"
+                      value={deployUrl}
+                      onChange={(e) => {
+                        setDeployUrl(e.target.value);
+                        setDeployUrlDirty(true);
+                        setDeployUrlMsg('');
+                      }}
+                      style={{
+                        flex: '1 1 280px',
+                        background: '#18181b',
+                        border: '1px solid #27272a',
+                        color: '#e4e4e7',
+                        padding: '9px 12px',
+                        fontSize: '12px',
+                        fontFamily: 'JetBrains Mono, monospace',
+                        borderRadius: '4px',
+                      }}
+                    />
+                    <button
+                      onClick={saveDeployUrl}
+                      disabled={!deployUrlDirty}
+                      style={{
+                        padding: '9px 16px',
+                        background: deployUrlDirty ? '#36d9ff' : '#27272a',
+                        color: deployUrlDirty ? '#04121a' : '#71717a',
+                        border: 'none',
+                        borderRadius: '4px',
+                        fontSize: '10px',
+                        fontFamily: 'JetBrains Mono, monospace',
+                        letterSpacing: '0.08em',
+                        cursor: deployUrlDirty ? 'pointer' : 'default',
+                      }}
+                    >
+                      SAVE
+                    </button>
+                  </div>
+                  <p style={{ margin: '8px 0 0', fontSize: '11px', color: '#71717a', lineHeight: 1.5 }}>
+                    Setting a live URL here enables the API Check, Post-Deployment and Lighthouse (Performance) checks on the next scan. Leave blank to use pass-status placeholders.
+                  </p>
+                  {deployUrlMsg && <p style={{ margin: '8px 0 0', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace', color: '#36d9ff' }}>{deployUrlMsg}</p>}
                 </div>
               </div>
 

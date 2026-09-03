@@ -105,6 +105,13 @@ export async function getProject(id: string): Promise<{ project: Project; histor
   return request<{ project: Project; history: ScanResult[] }>(`/api/projects/${encodeURIComponent(id)}`);
 }
 
+export async function updateProjectDeployUrl(id: string, deployUrl?: string): Promise<{ project: Project }> {
+  return request<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ deployUrl: deployUrl ?? '' }),
+  });
+}
+
 export async function getMe(): Promise<{ authenticated: boolean }> {
   return request<{ authenticated: boolean }>('/api/auth/me');
 }
