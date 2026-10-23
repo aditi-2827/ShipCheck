@@ -1,16 +1,42 @@
 {
-  "name": "shipcheck",
+  "name": "shipcheck-cli07",
   "version": "1.0.0",
   "description": "Deployment readiness analyzer for local-first projects",
-  "private": true,
+  "private": false,
   "bin": {
-    "shipcheck": "./bin/shipcheck.js"
+    "shipcheck-cli07": "./bin/shipcheck.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aditi-2827/ShipCheck.git"
+  },
+  "homepage": "https://github.com/aditi-2827/ShipCheck#readme",
+  "bugs": {
+    "url": "https://github.com/aditi-2827/ShipCheck/issues"
+  },
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "src",
+    "scripts",
+    "next.config.mjs",
+    "postcss.config.js",
+    "tailwind.config.ts",
+    "tsconfig.json",
+    "next-env.d.ts",
+    "README.md",
+    ".next"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "shipcheck",

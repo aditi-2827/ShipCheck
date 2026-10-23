@@ -355,8 +355,11 @@ async function handleInit(flags) {
   const auth = await authenticate(serverUrl);
   if (!auth.token && !auth.cookie) {
     throw new Error(
-      'Authentication required. Start the server with `shipcheck server` and open the link it prints, ' +
-        'or set SHIPCHECK_PASSWORD. If your server runs on a port other than 3140, set SHIPCHECK_SERVER_URL.',
+      'Authentication required.\n' +
+        '  1. Start the server: `shipcheck server` (or `npm run dev`)\n' +
+        '  2. Open the dashboard link it prints and log in\n' +
+        '  3. Or set SHIPCHECK_PASSWORD in your environment\n' +
+        '  If your server runs on a different port, set SHIPCHECK_SERVER_URL.',
     );
   }
 
@@ -370,7 +373,7 @@ async function handleInit(flags) {
   );
   if (res.statusCode !== 201 && res.statusCode !== 200) {
     const msg = res.data && res.data.error ? res.data.error.message : `HTTP ${res.statusCode}`;
-    throw new Error(`Project initialization failed: ${msg}`);
+    throw new Error(`Project initialization failed: ${msg}\n\nTip: Make sure the ShipCheck server is running and accessible at ${serverUrl}.`);
   }
 
   const project = res.data.data;
@@ -385,14 +388,17 @@ async function handleInit(flags) {
   fs.writeFileSync(configFile, JSON.stringify(configContent, null, 2), 'utf8');
 
   const dashSuffix = auth.token ? `?token=${auth.token}` : '';
-  console.log('✓ Project registered');
-  console.log(`Project:    ${project.name}`);
-  console.log(`Project ID: ${project.id}`);
+  console.log('✓ Project registered\n');
+  console.log(`Project:     ${project.name}`);
+  console.log(`Project ID:  ${project.id}`);
+  console.log(`Directory:   ${currentDir}`);
   if (deployUrl) {
-    console.log(`Deploy URL: ${deployUrl}`);
+    console.log(`Deploy URL:  ${deployUrl}`);
   }
-  console.log('\nDashboard:');
-  console.log(`${serverUrl}/project/${project.id}${dashSuffix}`);
+  console.log('\nNext step:');
+  console.log('  shipcheck scan\n');
+  console.log('Dashboard:');
+  console.log(`${serverUrl}/project/${project.id}${dashSuffix}\n`);
 }
 
 // Analyze the current project against the running server.
@@ -506,18 +512,22 @@ async function main() {
     } else if (command === 'scan') {
       await handleScan();
     } else {
-      console.log('ShipCheck CLI\n');
-      console.log('Usage:');
-      console.log('  shipcheck server              - Start the ShipCheck server and print the dashboard link');
-      console.log('  shipcheck init                - Register the current project with ShipCheck');
-      console.log('  shipcheck scan                - Analyze the current project\n');
-      console.log('Init options:');
-      console.log('  --deploy-url URL              Set the deployed application URL for post-deployment checks\n');
-      console.log('Server options:');
-      console.log('  --port N                      Port to bind (default 3140, or SHIPCHECK_PORT)');
-      console.log('  --host H                      Host to bind (default 127.0.0.1, or SHIPCHECK_HOST)');
-      console.log('  --dev                         Run `next dev` instead of the production `next start`');
-      process.exit(command ? 1 : 0);
+  console.log('ShipCheck CLI\n');
+  console.log('Usage:');
+  console.log('  shipcheck server              - Start the ShipCheck server and print the dashboard link');
+  console.log('  shipcheck init                - Register the current project with ShipCheck');
+  console.log('  shipcheck scan                - Analyze the current project\n');
+  console.log('Init options:');
+  console.log('  --deploy-url URL              Set the deployed application URL for post-deployment checks\n');
+  console.log('Server options:');
+  console.log('  --port N                      Port to bind (default 3140, or SHIPCHECK_PORT)');
+  console.log('  --host H                      Host to bind (default 127.0.0.1, or SHIPCHECK_HOST)');
+  console.log('  --dev                         Run `next dev` instead of the production `next start`\n');
+  console.log('Quick start:');
+  console.log('  1. shipcheck server           # Start dashboard');
+  console.log('  2. cd your-project && shipcheck init');
+  console.log('  3. shipcheck scan             # Run readiness check\n');
+  process.exit(command ? 1 : 0);
     }
   } catch (err) {
     console.error(`\n✖ Error: ${err.message}`);

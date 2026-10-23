@@ -1,0 +1,178 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import '../styles/global.css';
+---
+
+<BaseLayout>
+  <header>
+    <div class="container">
+      <div class="logo">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M9 1L16 5V13L9 17L2 13V5L9 1Z" stroke="var(--accent)" stroke-width="1.2"/>
+          <circle cx="9" cy="9" r="2" fill="var(--accent)"/>
+        </svg>
+        <span>ShipCheck</span>
+      </div>
+      <nav>
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#demo">Demo</a>
+        <a href="#install">Install</a>
+        <a href="https://github.com/aditi-2827/ShipCheck">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-grid">
+        <div>
+          <div class="eyebrow">Deployment readiness</div>
+          <h1>Ship with confidence. Locally.</h1>
+          <p class="lead">ShipCheck is a local-first deployment readiness analyzer. Scan security, build, tests, dependencies, and deployment checks in one terminal command and visualize them in a clean dashboard.</p>
+          <div class="cta">
+            <a class="btn primary" href="#install">Get started</a>
+            <a class="btn" href="https://github.com/aditi-2827/ShipCheck">View on GitHub</a>
+          </div>
+        </div>
+        <div class="terminal">
+          <div class="terminal-bar">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+            <span style="margin-left:12px; color: var(--muted); font-size: 13px;">shipcheck-cli07</span>
+          </div>
+          <div class="terminal-body">
+            <div><span class="prompt">$</span> <span class="cmd">npx shipcheck-cli07 server</span></div>
+            <div class="ok">✓ Ready at http://127.0.0.1:3140</div>
+            <div><span class="prompt">$</span> <span class="cmd">npx shipcheck-cli07 init</span></div>
+            <div class="ok">✓ Project registered • Next: shipcheck-cli07 scan</div>
+            <div><span class="prompt">$</span> <span class="cmd">npx shipcheck-cli07 scan</span></div>
+            <div class="ok">SHIP SCORE   92/100</div>
+            <div class="warn">WARN  Tests</div>
+            <div class="ok">PASS  Security • Build • Dependencies</div>
+            <div><span class="prompt">$</span> <span class="cmd"></span><span class="cursor"></span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="container">
+        <div class="section-header">
+          <div class="eyebrow">Features</div>
+          <h2>Everything you need to know before you ship</h2>
+          <p class="lead">Covers the checks that actually block releases, with clear fixes.</p>
+        </div>
+        <div class="grid">
+          <article class="card">
+            <h3>Security first</h3>
+            <p>Secret scanning, .env.example coverage, and console/debugger detection.</p>
+          </article>
+          <article class="card">
+            <h3>Build & Tests</h3>
+            <p>Runs your actual build and test scripts locally with real results.</p>
+          </article>
+          <article class="card">
+            <h3>Dependencies & CI/CD</h3>
+            <p>Audits deps, detects common CI providers, and validates configs.</p>
+          </article>
+          <article class="card">
+            <h3>Post-deploy checks</h3>
+            <p>When you add a deploy URL, run live API probes and Lighthouse performance audits.</p>
+          </article>
+          <article class="card full">
+            <h3>Local-first by design</h3>
+            <p>No external APIs. Scans run against your machine, with history stored locally under .data/.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="how" class="section">
+      <div class="container">
+        <div class="section-header">
+          <div class="eyebrow">How it works</div>
+          <h2>From repo to readiness in three steps</h2>
+        </div>
+        <div class="steps">
+          <div class="step">
+            <div class="step-num">01</div>
+            <h3>Start</h3>
+            <p class="lead" style="font-size: 16px;">Run <code>shipcheck server</code> to launch the local dashboard.</p>
+          </div>
+          <div class="step">
+            <div class="step-num">02</div>
+            <h3>Init</h3>
+            <p class="lead" style="font-size: 16px;">In your project, run <code>shipcheck init</code> to register it.</p>
+          </div>
+          <div class="step">
+            <div class="step-num">03</div>
+            <h3>Scan</h3>
+            <p class="lead" style="font-size: 16px;">Run <code>shipcheck scan</code> and review results in the dashboard.</p>
+          </div>
+          <div class="step">
+            <div class="step-num">04</div>
+            <h3>Track</h3>
+            <p class="lead" style="font-size: 16px;">History and trends stay local as you iterate.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="demo" class="section">
+      <div class="container">
+        <div class="section-header">
+          <div class="eyebrow">Preview</div>
+          <h2>See ShipCheck in action</h2>
+          <p class="lead">A clean, terminal-inspired dashboard that highlights blockers at a glance.</p>
+        </div>
+        <div class="demo-grid">
+          <figure class="demo-card">
+            <div class="demo-frame"></div>
+            <figcaption class="demo-caption">Dashboard overview — Ship score, category breakdown, and fixes</figcaption>
+          </figure>
+          <figure class="demo-card">
+            <div class="demo-frame"></div>
+            <figcaption class="demo-caption">Scan details — actionable issues with suggested fixes</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section id="install" class="section">
+      <div class="container">
+        <div class="section-header">
+          <div class="eyebrow">Install</div>
+          <h2>Get started in seconds</h2>
+          <p class="lead">No clone required. Run it directly with npx or install globally.</p>
+        </div>
+        <div class="grid">
+          <article class="card full">
+            <h3>Quick start (recommended)</h3>
+            <pre style="margin: 0; overflow-x: auto;"><code>$ npx shipcheck-cli07 server
+
+# In another terminal, in your project
+$ npx shipcheck-cli07 init
+$ npx shipcheck-cli07 scan</code></pre>
+            <p>Or install globally: <code>npm i -g shipcheck-cli07 && shipcheck-cli07 server</code></p>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container footer-row">
+      <div class="logo">
+        <svg width="16" height="16" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M9 1L16 5V13L9 17L2 13V5L9 1Z" stroke="var(--accent)" stroke-width="1.2"/>
+          <circle cx="9" cy="9" r="2" fill="var(--accent)"/>
+        </svg>
+        <span>ShipCheck</span>
+      </div>
+      <div>Local-first • No external APIs • MIT-like for personal use</div>
+      <div><a href="https://github.com/aditi-2827/ShipCheck">GitHub</a></div>
+    </div>
+  </footer>
+</BaseLayout>
