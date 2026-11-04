@@ -118,7 +118,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
               <div class="weight-badge"><span>Security + Dependencies + Code Quality</span><span class="num">32 / 100</span></div>
               <h3>Security &amp; dependencies</h3>
               <p class="muted" style="margin-bottom:14px;">Secret detection, environment coverage, dependency auditing, and ESLint code quality enforced against your own config.</p>
-              <div class="cat-list"><div class="cat-row"><span>Security</span><span class="w">18</span><span class="chip pass">pass</span></div><div class="cat-row"><span>Dependencies <span style="font-size:11px;opacity:0.7">(npm audit)</span></span><span class="w">6</span><span class="chip pass">pass</span></div><div class="cat-row"><span>Code Quality <span style="font-size:11px;opacity:0.7">(your ESLint config)</span></span><span class="w">8</span><span class="chip pass">pass</span></div></div>
+              <div class="cat-list"><div class="cat-row"><span>Security</span><span class="w">18</span><span class="chip pass">pass</span></div><div class="cat-row"><span>Dependencies <span class="muted-sm">(npm audit)</span></span><span class="w">6</span><span class="chip pass">pass</span></div><div class="cat-row"><span>Code Quality <span class="muted-sm">(your ESLint config)</span></span><span class="w">8</span><span class="chip pass">pass</span></div></div>
             </div>
           </article>
           <article class="panel f-terminal light-surface">
@@ -127,7 +127,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
           </article>
           <article class="panel f-deploy">
             <div class="panel-head"><span class="panel-tag">Deployment</span><span class="panel-pill">7 / 100</span></div>
-            <div class="panel-body"><h3>Deployment configuration</h3><p class="muted">Detects and validates where you deploy: Vercel, Netlify, Fly, Railway, Docker, or a Procfile/Heroku <code>app.json</code>.</p><div class="cat-list"><div class="cat-row"><span>Deployment</span><span class="w">6</span><span class="chip pass">pass</span></div><div class="cat-row"><span>Environment</span><span class="w">1</span><span class="chip pass">pass</span></div></div><div class="deploy-snippet">vercel.json<br><span>&nbsp;&nbsp;builds</span>: [{ <span>src</span>: <span>"package.json"</span>, <span>use</span>: <span>"@vercel/next"</span> }]</div></div>
+            <div class="panel-body"><h3>Deployment configuration</h3><p class="muted">Detects and validates where you deploy: Vercel, Netlify, Fly, Railway, Docker, or a Procfile/Heroku <code>app.json</code>.</p><div class="cat-list"><div class="cat-row"><span>Deployment</span><span class="w">6</span><span class="chip pass">pass</span></div><div class="cat-row"><span>Environment</span><span class="w">1</span><span class="chip pass">pass</span></div></div><div class="deploy-snippet">vercel.json<br><span>&nbsp;&nbsp;builds</span>: [&#123; <span>src</span>: <span>"package.json"</span>, <span>use</span>: <span>"@vercel/next"</span> &#125;]</div></div>
           </article>
           <article class="panel f-cicd">
             <div class="panel-head"><span class="panel-tag">CI/CD &amp; Docker</span><span class="panel-pill">5 / 100</span></div>
