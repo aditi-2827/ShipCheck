@@ -101,3 +101,21 @@ All API routes declare `export const dynamic = 'force-dynamic'` to avoid prerend
 - `next.config.mjs` sets `optimizePackageImports: ['lucide-react']`, but `lucide-react` is **not** installed. Don't import it unless you add it to `package.json`.
 - `reactStrictMode: true` is on — be aware effects run twice in dev.
 - Never add external scanning/auth/AI dependencies; core functionality must stay local.
+
+
+## Clean Code Guidelines
+
+Follow these rules whenever modifying this project:
+
+1. **Keep it simple:** Prefer the simplest implementation that solves the requirement.
+2. **Reuse existing code:** Check for existing components, utilities and functions before creating new ones.
+3. **Avoid duplication:** Extract shared logic or UI only when it genuinely improves maintainability.
+4. **No unnecessary dependencies:** Prefer existing packages, native APIs and standard libraries.
+5. **Preserve behaviour:** Do not break existing features, routes, APIs, UI or project structure.
+6. **Remove dead code:** Clean up unused imports, variables, functions and obsolete code introduced by your changes.
+7. **Keep responsibilities clear:** Avoid oversized components and functions that do too many unrelated things.
+8. **Handle errors properly:** Validate inputs and handle expected failures. Avoid empty catch blocks and silent failures.
+9. **Use consistent conventions:** Follow the existing TypeScript, React, Python and project-specific patterns.
+10. **Avoid unnecessary refactoring:** Do not modify unrelated files or rewrite working code just to make it look different.
+11. **Verify changes:** Run relevant lint, type-check and build commands after modifications.
+12. **Be transparent:** Report what changed, what was tested and any remaining issues. Never claim a test passed without running it.
