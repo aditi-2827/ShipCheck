@@ -112,42 +112,61 @@ import BaseLayout from '../layouts/BaseLayout.astro';
         <div class="feature-grid">
           <article class="feature-card">
             <div class="feature-icon">
-              <i data-lucide="settings" width="24" height="24"></i>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+              </svg>
             </div>
             <h3>Configuration Analysis</h3>
             <p>Validates deployment configs, environment setup, and project structure against common production requirements.</p>
           </article>
           <article class="feature-card">
             <div class="feature-icon">
-              <i data-lucide="package-check" width="24" height="24"></i>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 21H4V3l8 4 8-4z"/>
+                <path d="M12 19V3M16.5 6L12 3 7.5 6"/>
+                <polyline points="15 10 16 11 19 9"/>
+              </svg>
             </div>
             <h3>Dependency Checks</h3>
             <p>Runs npm audit and inspects dependencies for known issues, with results tied to the weighted Ship Score.</p>
           </article>
           <article class="feature-card">
             <div class="feature-icon">
-              <i data-lucide="shield-check" width="24" height="24"></i>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1a6 6 0 0 0 -6 6v7a6 6 0 0 0 6 6 6 6 0 0 0 6 -6V7a6 6 0 0 0 -6 -6"/>
+                <polyline points="9 11 12 14 18 8"/>
+              </svg>
             </div>
             <h3>Security Analysis</h3>
             <p>Scans for secrets, verifies .env.example coverage, and flags risky patterns without sending data off-machine.</p>
           </article>
           <article class="feature-card">
             <div class="feature-icon">
-              <i data-lucide="code-2" width="24" height="24"></i>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="16 18 22 12 16 6"/>
+                <polyline points="8 6 2 12 8 18"/>
+              </svg>
             </div>
             <h3>Code Quality</h3>
             <p>Runs ESLint against your project config to catch code quality issues as part of the weighted score.</p>
           </article>
           <article class="feature-card">
             <div class="feature-icon">
-              <i data-lucide="key-round" width="24" height="24"></i>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 2l-3 2M4.93 4.93l-2.82 2.82M2 21h3M18 6l-3 3M12 18v-3M8 15l3 3"/>
+                <circle cx="12" cy="12" r="7"/>
+              </svg>
             </div>
             <h3>Secret Detection</h3>
             <p>Performs local regex-based secret scanning and checks for missing .env.example coverage.</p>
           </article>
           <article class="feature-card">
             <div class="feature-icon">
-              <i data-lucide="git-branch" width="24" height="24"></i>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="6" cy="6" r="3"/>
+                <path d="M17 12v-3M17 18v-3M14 18h3M14 6v3M10 12h-4M10 12h3M10 6h4M10 18h4"/>
+              </svg>
             </div>
             <h3>Git Analysis</h3>
             <p>Checks branch, working tree status, and .gitignore presence to catch common repository issues.</p>
@@ -199,7 +218,10 @@ import BaseLayout from '../layouts/BaseLayout.astro';
         <div class="privacy-grid">
           <article class="privacy-card">
             <div class="feature-icon" style="margin-bottom: 0;">
-              <i data-lucide="hard-drive" width="18" height="18"></i>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12V5a1 1 0 0 1 1-1h18a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/>
+                <path d="M15 5v14M9 5v14"/>
+              </svg>
             </div>
             <div>
               <h3>Local execution</h3>
@@ -208,7 +230,10 @@ import BaseLayout from '../layouts/BaseLayout.astro';
           </article>
           <article class="privacy-card">
             <div class="feature-icon" style="margin-bottom: 0;">
-              <i data-lucide="lock" width="18" height="18"></i>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
             </div>
             <div>
               <h3>No source-code uploads</h3>
@@ -217,7 +242,11 @@ import BaseLayout from '../layouts/BaseLayout.astro';
           </article>
           <article class="privacy-card">
             <div class="feature-icon" style="margin-bottom: 0;">
-              <i data-lucide="cpu" width="18" height="18"></i>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="4" width="16" height="16" rx="2" ry="2"/>
+                <rect x="8" y="8" width="8" height="8" rx="1" ry="1"/>
+                <path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>
+              </svg>
             </div>
             <div>
               <h3>No external AI API dependency</h3>
