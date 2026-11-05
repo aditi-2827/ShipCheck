@@ -3,9 +3,7 @@ import { NextResponse } from 'next/server';
 export type ErrorCode =
   | 'BAD_REQUEST'
   | 'UNAUTHORIZED'
-  | 'FORBIDDEN'
   | 'NOT_FOUND'
-  | 'RATE_LIMITED'
   | 'SCAN_FAILED'
   | 'CONFLICT'
   | 'INTERNAL';
