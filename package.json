@@ -44,8 +44,6 @@
     "deployment",
     "nextjs"
   ],
-  "author": "",
-  "license": "ISC",
   "type": "commonjs",
   "dependencies": {
     "lighthouse": "^12.8.2",
