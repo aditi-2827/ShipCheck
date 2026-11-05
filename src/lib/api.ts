@@ -111,7 +111,3 @@ export async function updateProjectDeployUrl(id: string, deployUrl?: string): Pr
     body: JSON.stringify({ deployUrl: deployUrl ?? '' }),
   });
 }
-
-export async function getMe(): Promise<{ authenticated: boolean }> {
-  return request<{ authenticated: boolean }>('/api/auth/me');
-}
