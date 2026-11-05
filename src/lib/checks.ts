@@ -14,6 +14,9 @@ const SERVER_ROOT = process.cwd();
 // Overall cap for the whole scan (per-command timeouts still apply individually).
 const SCAN_GLOBAL_DEADLINE_MS = 600_000; // 10 minutes
 
+// Bundle size above this triggers a warning.
+const BUNDLE_WARNING_BYTES = 5 * 1024 * 1024; // 5 MB
+
 // Only one scan may execute at a time (single-flight).
 let activeScan = false;
 
@@ -173,46 +176,6 @@ async function withTempWorkspace<T>(targetDir: string, fn: (ws: TempWorkspace) =
   } finally {
     destroyTempWorkspace(ws);
   }
-}
-
-function runCommandIn(
-  args: string[],
-  cwd: string,
-  opts: { timeoutMs?: number; signal?: AbortSignal } = {},
-): Promise<RunResult> {
-  const timeoutMs = opts.timeoutMs ?? 30_000;
-  return new Promise((resolve) => {
-    const planned = planSpawn(args);
-    execFile(
-      planned.file,
-      planned.cmdArgs,
-      {
-        cwd,
-        timeout: timeoutMs,
-        maxBuffer: 10 * 1024 * 1024,
-        windowsHide: true,
-        ...(opts.signal ? { signal: opts.signal } : {}),
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          const err = error as NodeJS.ErrnoException & {
-            code?: number | string;
-            signal?: string | null;
-            killed?: boolean;
-          };
-          resolve({
-            stdout: stdout ?? '',
-            stderr: stderr ?? '',
-            exitCode: typeof err.code === 'number' ? err.code : null,
-            signal: err.signal ?? null,
-            timedOut: err.killed === true || opts.signal?.aborted === true,
-          });
-          return;
-        }
-        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', exitCode: 0, signal: null, timedOut: false });
-      },
-    );
-  });
 }
 
 function isCleanGitStatus(stdout: string): boolean {
@@ -560,9 +523,10 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
       let depSummary = 'not run';
       let depStatus: CheckSummary['status'] = 'pass';
       if (fileExists(targetDir, 'package-lock.json') || fileExists(targetDir, 'package.json')) {
-        const auditRes = await runCommandIn(['npm', 'audit', '--audit-level=high', '--json'], ws.dir, {
+        const auditRes = await runCommand(['npm', 'audit', '--audit-level=high', '--json'], {
           timeoutMs: 60_000,
           signal,
+          cwd: ws.dir,
         });
         if (auditRes.exitCode === 0) {
           depStatus = 'pass';
@@ -599,7 +563,7 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
             fix: 'Add a "build" script to package.json if this package should produce a deployable build.',
           });
         } else {
-          const buildRes = await runCommandIn(['npm', 'run', 'build'], ws.dir, { timeoutMs: 180_000, signal });
+          const buildRes = await runCommand(['npm', 'run', 'build'], { timeoutMs: 180_000, signal, cwd: ws.dir });
           if (buildRes.exitCode === 0) {
             buildStatus = 'pass';
             buildSummary = buildRes.timedOut ? 'Build timed out' : 'Build completed successfully';
@@ -631,7 +595,7 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
       let testStatus: CheckSummary['status'] = 'pass';
       let testSummary = 'No test suite configured';
       if (packageJsonTestScript(targetDir)) {
-        const testRes = await runCommandIn(['npm', 'test'], ws.dir, { timeoutMs: 180_000, signal });
+        const testRes = await runCommand(['npm', 'test'], { timeoutMs: 180_000, signal, cwd: ws.dir });
         if (testRes.exitCode === 0) {
           testStatus = 'pass';
           testSummary = 'Tests passed';
@@ -765,55 +729,49 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
     if (hasDbConfig) break;
   }
 
+  // Read package.json once for dependency-based detection
+  let allDeps: Record<string, string> = {};
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    allDeps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+  } catch {
+    // No package.json or parse error
+  }
+
   // Check package.json dependencies if config not found
   if (!hasDbConfig) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf8')) as {
-        dependencies?: Record<string, string>;
-        devDependencies?: Record<string, string>;
-      };
-      const allDeps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
-      for (const fw of DB_FRAMEWORKS) {
-        for (const dp of fw.depPatterns) {
-          for (const dep of Object.keys(allDeps)) {
-            if (dp.test(dep)) {
-              detectedDb = fw.name;
-              hasDbConfig = true;
-              break;
-            }
+    for (const fw of DB_FRAMEWORKS) {
+      for (const dp of fw.depPatterns) {
+        for (const dep of Object.keys(allDeps)) {
+          if (dp.test(dep)) {
+            detectedDb = fw.name;
+            hasDbConfig = true;
+            break;
           }
-          if (hasDbConfig) break;
         }
         if (hasDbConfig) break;
       }
-    } catch {
-      // No package.json or parse error
+      if (hasDbConfig) break;
     }
   }
 
   // Detect raw drivers
   let detectedDriver: string | null = null;
   if (!detectedDb) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf8')) as {
-        dependencies?: Record<string, string>;
-        devDependencies?: Record<string, string>;
-      };
-      const allDeps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
-      for (const dr of DB_DRIVERS) {
-        for (const dp of dr.depPatterns) {
-          for (const dep of Object.keys(allDeps)) {
-            if (dp.test(dep)) {
-              detectedDriver = dr.name;
-              break;
-            }
+    for (const dr of DB_DRIVERS) {
+      for (const dp of dr.depPatterns) {
+        for (const dep of Object.keys(allDeps)) {
+          if (dp.test(dep)) {
+            detectedDriver = dr.name;
+            break;
           }
-          if (detectedDriver) break;
         }
         if (detectedDriver) break;
       }
-    } catch {
-      // No package.json
+      if (detectedDriver) break;
     }
   }
 
@@ -1466,8 +1424,8 @@ async function scanBody(targetDir: string, projectId: string | undefined, signal
   // Bundle-size analysis (always available from the build output).
   if (bundleFiles > 0) {
     const sizeMb = (bundleBytes / (1024 * 1024)).toFixed(2);
-    perfChecks.push({ slug: 'bundle-size', name: 'Bundle Size', status: bundleBytes > 5 * 1024 * 1024 ? 'warning' : 'pass', detail: `${sizeMb} MB across ${bundleFiles} JS/CSS file(s)` });
-    if (bundleBytes > 5 * 1024 * 1024) {
+    perfChecks.push({ slug: 'bundle-size', name: 'Bundle Size', status: bundleBytes > BUNDLE_WARNING_BYTES ? 'warning' : 'pass', detail: `${sizeMb} MB across ${bundleFiles} JS/CSS file(s)` });
+    if (bundleBytes > BUNDLE_WARNING_BYTES) {
       perfIssues.push({
         severity: 'warning',
         title: 'Large JavaScript/CSS bundle',
