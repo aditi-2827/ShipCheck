@@ -1,45 +1,31 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { getFeed, getHistory, runScan as apiRunScan, initAuth, ClientApiError } from '@/lib/api';
+import type { FeedData, Issue, ScanResult } from '@/lib/types';
 import {
-  getFeed,
-  getHistory,
-  runScan as apiRunScan,
-  initAuth,
-  ClientApiError,
-} from '@/lib/api';
-import type { FeedData, ScanResult } from '@/lib/types';
+  DashboardShell,
+  DashboardCard,
+  Marker,
+  Badge,
+  Button,
+  Table,
+  FilterChip,
+} from '@/components/ui';
+import {
+  formatTime,
+  statusColor,
+  statusLabel,
+  readinessLabel,
+  categoryName,
+} from '@/components/ui/utils';
 
 const fallbackStages = ['Discover', 'Config', 'Git', 'Dependencies', 'Tests', 'Build', 'Docker', 'Security', 'Ship'];
 
 type State = 'pass' | 'warning' | 'critical' | 'running' | 'pending';
 
-function Marker({ state }: { state: State }) {
-  return <span className={`marker marker-${state}`}>{state === 'pass' ? '✓' : state === 'warning' ? '!' : state === 'critical' ? '×' : state === 'running' ? '↻' : '·'}</span>;
-}
-
-function CategoryLabel({ status }: { status: string }) {
-  const text = status === 'pass' ? 'HEALTHY' : status === 'critical' ? 'CRITICAL' : status === 'pending' ? 'PENDING' : 'WARNING';
-  return <>{text}</>;
-}
-
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-interface TimelineRow {
-  time: string;
-  score: number;
-  status: string;
-  branch: string;
-  statusClass: string;
-  delta: number;
-}
-
 export default function Home() {
-  const [filter, setFilter] = useState('all');
+  const [filter, setFilter] = useState<'all' | 'critical' | 'warning' | 'info'>('all');
   const [scanning, setScanning] = useState(false);
   const [feed, setFeed] = useState<FeedData | null>(null);
   const [result, setResult] = useState<ScanResult | null>(null);
@@ -89,9 +75,9 @@ export default function Home() {
     }
   }, [scanning]);
 
-  const categories: { name: string; status: string; score: string }[] = result
-    ? result.categories.map((c) => ({ name: c.name, status: c.status, score: c.score }))
-    : (feed?.categories ?? []).map((c) => ({ name: c.name, status: 'pending', score: '—' }));
+  const categories = result
+    ? result.categories.map((c) => ({ slug: c.slug, name: c.name, status: c.status, score: c.score }))
+    : (feed?.categories ?? []).map((c) => ({ slug: c.slug, name: c.name, status: 'pending' as State, score: '—' }));
 
   const scanIssues = result?.issues ?? [];
   const criticalCount = scanIssues.filter((i) => i.severity === 'critical').length;
@@ -99,17 +85,12 @@ export default function Home() {
   const infoCount = scanIssues.filter((i) => i.severity === 'info').length;
   const shownIssues = filter === 'all' ? scanIssues : scanIssues.filter((issue) => issue.severity === filter);
 
-  const readyLabel = result
-    ? result.status === 'READY'
-      ? 'READY TO SHIP'
-      : result.status === 'WARNING'
-        ? 'WARNING'
-        : 'BLOCKED'
-    : 'PENDING';
+  const readyLabel = readinessLabel(result?.status ?? null);
   const score = result ? result.score : null;
-  const lastScanLabel = scanning ? 'NOW / ACTIVE' : result ? formatTime(result.createdAt) : 'NO SCAN YET';
+  const lastScanLabel = scanning ? 'SCANNING…' : result ? formatTime(result.createdAt) : 'NO SCAN YET';
+  const progressColor = score !== null && score >= 80 ? 'var(--sc-success)' : score !== null && score >= 60 ? 'var(--sc-warning)' : 'var(--sc-danger)';
 
-  const timelineRows: TimelineRow[] = history.map((h, i) => {
+  const timelineRows = history.map((h, i) => {
     const prev = history[i + 1];
     const delta = prev ? h.score - prev.score : 0;
     return {
@@ -117,25 +98,264 @@ export default function Home() {
       score: h.score,
       status: h.status,
       branch: h.env?.branch ?? 'n/a',
-      statusClass: h.status === 'READY' ? 'green-text' : h.status === 'WARNING' ? 'amber-text' : 'red-text',
       delta,
     };
   });
 
+  const topbarActions = (
+    <Button variant="primary" onClick={runScan} disabled={scanning} size="sm">
+      {scanning ? '↻ SCANNING…' : '▶ RUN SCAN'}
+    </Button>
+  );
+
   return (
-    <main className="min-h-screen"><div className="shell">
-      <header className="topbar"><a href="#top" className="brand"><span className="brand-mark">SC</span><span>SHIPCHECK</span><small>LOCAL-FIRST / v1.0</small></a><nav className="nav" aria-label="Primary navigation">{['Overview', 'Checks', 'Issues', 'Pipeline', 'History', 'Settings'].map((item, index) => <a key={item} href={`#${item.toLowerCase()}`} className={index === 0 ? 'nav-active' : ''}><b>0{index + 1}</b>{item}<kbd>G {item[0]}</kbd></a>)}</nav><div className="local-state"><i /> LOCAL</div></header>
+    <DashboardShell
+      breadcrumb={['ShipCheck', 'Overview']}
+      topbarActions={topbarActions}
+    >
+      <section className="section">
+        <div className="page-header">
+          <h1 className="page-title">Overview</h1>
+          <p className="page-description">Monitor your project&apos;s deployment readiness with weighted category scores.</p>
+        </div>
+        {errorMsg && (
+          <DashboardCard className="mb-6">
+            <div style={{ color: 'var(--sc-danger)', fontSize: '13px', fontFamily: 'JetBrains Mono, monospace', padding: '12px 16px', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '6px' }}>
+              {errorMsg}
+            </div>
+          </DashboardCard>
+        )}
+        <div className="grid grid-cols-2">
+          <DashboardCard className="flex flex-col gap-4">
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+              <span style={{ fontSize: '56px', fontWeight: '600', color: 'var(--sc-text-primary)', letterSpacing: '-0.03em', fontVariantNumeric: 'tabular-nums' }}>
+                {score ?? '—'}
+              </span>
+              <span style={{ fontSize: '16px', color: 'var(--sc-text-muted)', fontFamily: 'JetBrains Mono, monospace' }}> / 100</span>
+            </div>
+            <p style={{ color: 'var(--sc-text-secondary)', fontSize: '13px', fontFamily: 'JetBrains Mono, monospace', margin: 0 }}>
+              {readyLabel}
+            </p>
+            <div style={{ height: '6px', background: 'var(--sc-border)', borderRadius: '3px', overflow: 'hidden', marginTop: '8px' }}>
+              <div
+                style={{
+                  height: '100%',
+                  width: `${score ?? 0}%`,
+                  background: progressColor,
+                  transition: 'width 0.5s ease',
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--sc-text-muted)', fontFamily: 'JetBrains Mono, monospace', marginTop: '10px' }}>
+              <span>{result ? result.checksRun : '—'} checks passed</span>
+              <span>{result ? result.warnings : '—'} warnings</span>
+              <span>{result ? result.blockers : '—'} blockers</span>
+            </div>
+          </DashboardCard>
+          <DashboardCard className="flex flex-col gap-3">
+            <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--sc-text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>SCAN SUMMARY</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--sc-surface-hover)', border: '1px solid var(--sc-border)', borderRadius: '6px', marginBottom: '8px' }}>
+              <span style={{ fontSize: '13px', color: 'var(--sc-text-secondary)' }}>Passed</span>
+              <Badge status="pass">{result ? result.checksRun : '—'}</Badge>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--sc-surface-hover)', border: '1px solid var(--sc-border)', borderRadius: '6px', marginBottom: '8px' }}>
+              <span style={{ fontSize: '13px', color: 'var(--sc-text-secondary)' }}>Warnings</span>
+              <Badge status="warning">{warningCount}</Badge>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--sc-surface-hover)', border: '1px solid var(--sc-border)', borderRadius: '6px' }}>
+              <span style={{ fontSize: '13px', color: 'var(--sc-text-secondary)' }}>Blockers</span>
+              <Badge status="critical">{criticalCount}</Badge>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--sc-surface-hover)', border: '1px solid var(--sc-border)', borderRadius: '6px' }}>
+              <span style={{ fontSize: '13px', color: 'var(--sc-text-secondary)' }}>Last scan</span>
+              <span style={{ fontSize: '13px', color: 'var(--sc-text-primary)', fontFamily: 'JetBrains Mono, monospace' }}>{lastScanLabel}</span>
+            </div>
+          </DashboardCard>
+        </div>
 
-      <section id="top" className="hero"><div className="hero-copy"><p className="eyebrow"><span className="signal" /> DEPLOYMENT INTELLIGENCE / LOCAL-FIRST</p><h1><strong>SHIP</strong><em>with</em><strong className="accent-text">CONFIDENCE.</strong></h1><p className="hero-lede">Know what is healthy, what needs attention, and what blocks deployment before your code leaves the machine.</p><div className="actions"><button className="primary-button" onClick={runScan}><span>{scanning ? '↻' : '▶'}</span>{scanning ? 'SCANNING...' : 'RUN SHIPCHECK'}</button><a className="text-button" href="#issues">VIEW ISSUES <span>↗</span></a></div>{errorMsg && <p className="red-text" style={{ font: '500 10px "JetBrains Mono", monospace', letterSpacing: '.08em', textTransform: 'uppercase', margin: '20px 0 0' }}>{errorMsg}</p>}</div><aside className="status-instrument"><div className="instrument-head"><span>SHIPCHECK STATUS</span><span className="live"><i /> LIVE</span></div><div className="ready-row"><Marker state="pass" /><span>{scanning ? 'SCAN IN PROGRESS' : 'SYSTEM READY'}</span></div><div className="instrument-meta"><span>LAST SCAN</span><strong>{lastScanLabel}</strong></div><div className="score-big">{score ?? '—'}<small>/100</small></div><div className="ready-label">{readyLabel} <span>✓</span></div><div className="score-bar"><span style={{ width: `${score ?? 0}%` }} /></div></aside></section>
+        <div className="grid grid-cols-4">
+          {categories.map((category) => (
+            <DashboardCard key={category.slug} className="flex flex-col gap-3">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '11px', color: 'var(--sc-text-secondary)', fontFamily: 'JetBrains Mono, monospace' }}>{categoryName(category.slug)}</span>
+                <Marker state={category.status} />
+              </div>
+              <div style={{ fontSize: '20px', fontWeight: '600', color: 'var(--sc-text-primary)', fontVariantNumeric: 'tabular-nums' }}>{category.score}</div>
+              <Badge status={category.status}>{statusLabel(category.status)}</Badge>
+            </DashboardCard>
+          ))}
+        </div>
+      </section>
 
-      <section className="overview-section" id="overview"><div className="section-heading"><div><p className="eyebrow">01 / OVERVIEW</p><h2>Deployment health</h2></div><button className="quiet-button" onClick={runScan}>{scanning ? 'SCAN IN PROGRESS' : 'RUN NEW SCAN'} <span>↗</span></button></div><div className="health-grid"><div className="health-feature"><div className="feature-top"><div><p className="eyebrow">CURRENT SHIP SCORE</p><div className="feature-score">{score ?? '—'} <small>/ 100</small></div></div><div className="ready-stamp">{readyLabel} <span>✓</span></div></div><div className="segmented-bar">{Array.from({ length: 10 }, (_, index) => <i key={index} />)}</div><div className="feature-foot"><span><b className="green-text">{result ? result.checksRun : '—'}</b> CHECKS PASSED</span><span><b className="amber-text">{result ? result.warnings : '—'}</b> WARNINGS</span><span><b className="red-text">{result ? result.blockers : '—'}</b> BLOCKERS</span></div></div><div className="category-grid">{categories.map((category) => <div className={`category ${category.status === 'critical' ? 'category-critical' : ''}`} key={category.name}><div className="category-top"><p className="eyebrow">{category.name}</p><Marker state={category.status as State} /></div><strong>{category.score}</strong><div className="category-state"><i className={`state-dot ${category.status}`} /> <CategoryLabel status={category.status} /></div></div>)}</div></div></section>
+      <section className="section">
+        <div className="section-header">
+          <div>
+            <h2 className="section-title">Issues requiring attention</h2>
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {[
+              { key: 'all', label: 'ALL', count: scanIssues.length },
+              { key: 'critical', label: 'CRITICAL', count: criticalCount },
+              { key: 'warning', label: 'WARNING', count: warningCount },
+              { key: 'info', label: 'INFO', count: infoCount },
+            ].map(function (item) {
+              return (
+                <FilterChip
+                  key={item.key}
+                  label={item.label}
+                  count={item.count}
+                  active={filter === item.key}
+                  onSelect={function (k: string) { setFilter(k as 'all' | 'critical' | 'warning' | 'info'); }}
+                />
+              );
+            })}
+          </div>
+        </div>
+        <DashboardCard>
+          <Table<Issue>
+            columns={[
+              { key: 'severity', label: 'SEVERITY', align: 'left' },
+              { key: 'title', label: 'ISSUE', align: 'left' },
+              { key: 'file', label: 'FILE', align: 'left' },
+              { key: 'status', label: 'STATUS', align: 'left' },
+            ]}
+            data={shownIssues}
+            rowKey={(i: Issue) => i.title}
+            renderCell={(issue: Issue, column) => {
+              switch (column.key) {
+                case 'severity': {
+                  const sev = issue.severity as 'pass' | 'warning' | 'critical' | 'running' | 'pending';
+                  return (
+                    <span style={{ color: statusColor(sev), fontWeight: '600', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase' }}>
+                      {issue.severity.toUpperCase()}
+                    </span>
+                  );
+                }
+                case 'title':
+                  return <span style={{ fontSize: '13px', color: 'var(--sc-text-primary)' }}>{issue.title}</span>;
+                case 'file':
+                  return (
+                    <span style={{ fontSize: '12px', color: 'var(--sc-text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>
+                      {issue.file}{issue.line ? `:${issue.line}` : ''}
+                    </span>
+                  );
+                case 'status':
+                  return <span style={{ fontSize: '11px', color: 'var(--sc-text-secondary)', fontFamily: 'JetBrains Mono, monospace' }}>Open</span>;
+                default:
+                  return null;
+              }
+            }}
+          />
+          {shownIssues.length === 0 && (
+            <p style={{ color: 'var(--sc-text-muted)', fontSize: '13px', padding: '24px', textAlign: 'center' }}>No issues found.</p>
+          )}
+        </DashboardCard>
+      </section>
 
-      <section className="split-section" id="issues"><div className="issue-panel"><div className="section-heading compact"><div><p className="eyebrow">02 / ISSUES</p><h2>Issue explorer</h2></div><span className="count-badge">{scanIssues.length} OPEN</span></div><div className="filters">{[['all', 'ALL', scanIssues.length], ['critical', 'CRITICAL', criticalCount], ['warning', 'WARNING', warningCount], ['info', 'INFO', infoCount]].map(([key, label, count]) => <button key={key} className={filter === key ? `filter-active filter-${key}` : ''} onClick={() => setFilter(String(key))}>{label} <b>{count}</b></button>)}</div><div className="issue-list">{shownIssues.map((issue) => <article className={`issue ${issue.severity}`} key={issue.title}><div className="issue-severity"><Marker state={issue.severity === 'critical' ? 'critical' : issue.severity === 'warning' ? 'warning' : 'pending'} /> {issue.severity.toUpperCase()}</div><h3>{issue.title}</h3><code>{issue.file}{issue.line ? `:${issue.line}` : ''}</code><p>{issue.message}</p><div className="recommendation"><span>RECOMMENDATION</span>{issue.fix}</div><div className="issue-actions"><button>MARK REVIEWED</button><button>VIEW FILE ↗</button></div></article>)}</div></div>
+      <section className="section">
+        <div className="section-header">
+          <div>
+            <h2 className="section-title">Scan pipeline</h2>
+          </div>
+          <span style={{ fontSize: '11px', color: scanning ? 'var(--sc-accent)' : 'var(--sc-text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>
+            {scanning ? '● RUNNING' : '○ STANDBY'}
+          </span>
+        </div>
+        <DashboardCard className="flex flex-col gap-4">
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            {(feed?.stages ?? fallbackStages).map((stage, index) => (
+              <div key={stage} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Marker state={scanning && index === 4 ? 'running' : index < 5 ? 'pass' : 'pending'} />
+                <span style={{ fontSize: '12px', color: 'var(--sc-text-secondary)', fontFamily: 'JetBrains Mono, monospace' }}>{stage}</span>
+                {index < (feed?.stages ?? fallbackStages).length - 1 && (
+                  <span style={{ fontSize: '10px', color: 'var(--sc-text-muted)' }}>/</span>
+                )}
+              </div>
+            ))}
+          </div>
+          <div style={{ background: '#0a0a0b', border: '1px solid var(--sc-border)', borderRadius: '6px', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--sc-border)', background: 'rgba(255,255,255,0.03)' }}>
+              <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ff5f56', display: 'inline-block', marginRight: '6px' }} />
+              <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ffbd2e', display: 'inline-block', marginRight: '6px' }} />
+              <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#27c93f', display: 'inline-block', marginRight: '10px' }} />
+              <b style={{ fontSize: '12px', color: 'var(--sc-text-primary)', fontFamily: 'JetBrains Mono, monospace' }}>shipcheck / scan.log</b>
+            </div>
+            <div style={{ padding: '12px', fontSize: '12px', lineHeight: '1.6', fontFamily: 'JetBrains Mono, monospace', color: 'var(--sc-text-secondary)', overflowX: 'auto', maxHeight: '300px', overflowY: 'auto' }}>
+              <p><span style={{ color: 'var(--sc-text-muted)' }}>❯</span> shipcheck scan --local</p>
+              <p><span style={{ color: 'var(--sc-success)' }}>✓</span> detecting project ........................ passed</p>
+              <p><span style={{ color: 'var(--sc-success)' }}>✓</span> checking environment ....................... passed</p>
+              <p><span style={{ color: 'var(--sc-success)' }}>✓</span> inspecting git ............................... passed</p>
+              <p><span style={{ color: 'var(--sc-warning)' }}>!</span> checking dependencies ...................... warning</p>
+              <p><span style={{ color: 'var(--sc-success)' }}>✓</span> running tests .................................. passed</p>
+              <p style={{ borderTop: '1px solid var(--sc-border)', paddingTop: '8px', marginTop: '8px', color: 'var(--sc-text-secondary)' }}>
+                SHIP SCORE <strong style={{ color: 'var(--sc-text-primary)' }}>{score ?? '—'} / 100</strong>
+              </p>
+              <p style={{ color: 'var(--sc-text-secondary)' }}>
+                STATUS{' '}
+                <strong style={{ color: result?.status === 'BLOCKED' ? 'var(--sc-danger)' : result?.status === 'WARNING' ? 'var(--sc-warning)' : 'var(--sc-success)' }}>
+                  {result ? result.status : 'PENDING'}
+                </strong>
+              </p>
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: 'var(--sc-text-primary)', animation: 'sc-blink 1s infinite', marginRight: '6px' }} />
+            </div>
+          </div>
+        </DashboardCard>
+      </section>
 
-      <div className="pipeline-panel" id="pipeline"><div className="section-heading compact"><div><p className="eyebrow">03 / PIPELINE</p><h2>Scan flow</h2></div><span className="running-label"><i /> {scanning ? 'RUNNING' : 'STANDBY'}</span></div><div className="pipeline">{(feed?.stages ?? fallbackStages).map((stage, index) => { const state: State = scanning && index === 4 ? 'running' : index < 5 ? 'pass' : 'pending'; return <div className={`stage stage-${state}`} key={stage}><Marker state={state} /><span>{stage}</span>{index < (feed?.stages ?? fallbackStages).length - 1 && <i className="stage-line" />}</div>; })}</div><div className="terminal"><div className="terminal-bar"><span /> <span /> <span /><b>shipcheck / scan.log</b></div><div className="terminal-lines"><p><b>$</b> shipcheck scan --local</p><p><span className="green-text">✓</span> detecting project ............ passed</p><p><span className="green-text">✓</span> checking environment ......... passed</p><p><span className="green-text">✓</span> inspecting git ............... passed</p><p><span className="amber-text">!</span> checking dependencies ........ warning</p><p><span className="green-text">✓</span> running tests ................ passed</p><p className="terminal-rule">----------------------------------------</p><p className="terminal-result">SHIP SCORE <strong>{score ?? '—'} / 100</strong></p><p>STATUS <strong className={result && result.status === 'BLOCKED' ? 'red-text' : result && result.status === 'WARNING' ? 'amber-text' : 'green-text'}>{result ? result.status : 'PENDING'}</strong></p><span className="cursor" /></div></div></div></section>
-
-      <section className="bottom-grid" id="history"><div className="history-panel"><div className="section-heading compact"><div><p className="eyebrow">04 / HISTORY</p><h2>Scan timeline</h2></div><span className="muted-label">TODAY</span></div><div className="timeline">{timelineRows.map((row) => <div className="timeline-row" key={`${row.time}-${row.score}`}><time>{row.time}</time><strong>{row.score}<small>/100</small></strong><span className={row.statusClass}>{row.status}</span><code>{row.branch}</code><small className={row.delta === 0 ? '' : row.delta > 0 ? 'green-text' : 'red-text'}>{row.delta === 0 ? '→ 0' : row.delta > 0 ? `↑ ${row.delta}` : `↓ ${Math.abs(row.delta)}`}</small></div>)}</div></div><div className="cicd-panel"><div className="section-heading compact"><div><p className="eyebrow violet-label">05 / CI/CD</p><h2>Automation gate</h2></div><span className="violet-label">GITHUB ACTIONS</span></div><div className="automation-flow"><span>PUSH</span><i>→</i><span>SHIPCHECK</span><i>→</i><span>SCAN</span><i>→</i><strong>≥ 80<br /><b>PASS ✓</b></strong><i>→</i><span>DEPLOY</span></div><p className="cicd-note">Every push gets a readiness score before it reaches production.</p></div></section>
-      <footer><span>SHIPCHECK / KNOW BEFORE YOU SHIP</span><span>ALL SYSTEMS NOMINAL <i /></span></footer>
-    </div></main>
+      <section className="section">
+        <div className="section-header">
+          <div>
+            <h2 className="section-title">Recent scan activity</h2>
+          </div>
+        </div>
+        <DashboardCard>
+          <Table<{ time: string; score: number; status: string; branch: string; delta: number }>
+            columns={[
+              { key: 'time', label: 'TIME', align: 'left' },
+              { key: 'score', label: 'SCORE', align: 'right' },
+              { key: 'status', label: 'STATUS', align: 'left' },
+              { key: 'branch', label: 'BRANCH', align: 'left' },
+              { key: 'delta', label: 'DELTA', align: 'right' },
+            ]}
+            data={timelineRows}
+            rowKey={(r) => `${r.time}-${r.score}`}
+            renderCell={(row, column) => {
+              switch (column.key) {
+                case 'time':
+                  return <span style={{ fontSize: '12px', color: 'var(--sc-text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>{row.time}</span>;
+                case 'score':
+                  return (
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--sc-text-primary)', fontFamily: 'JetBrains Mono, monospace', fontVariantNumeric: 'tabular-nums' }}>
+                      {row.score}
+                      <span style={{ fontSize: '11px', color: 'var(--sc-text-muted)', marginLeft: '4px' }}> / 100</span>
+                    </span>
+                  );
+                case 'status':
+                  return (
+                    <span style={{ color: result?.status === 'BLOCKED' ? 'var(--sc-danger)' : result?.status === 'WARNING' ? 'var(--sc-warning)' : 'var(--sc-success)', fontSize: '11px', fontWeight: '600', fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase' }}>
+                      {row.status}
+                    </span>
+                  );
+                case 'branch':
+                  return (
+                    <span style={{ fontSize: '12px', color: 'var(--sc-text-secondary)', fontFamily: 'JetBrains Mono, monospace' }}>{row.branch}</span>
+                  );
+                case 'delta':
+                  return (
+                    <span style={{ fontSize: '12px', fontFamily: 'JetBrains Mono, monospace', color: row.delta === 0 ? 'var(--sc-text-muted)' : row.delta > 0 ? 'var(--sc-success)' : 'var(--sc-danger)', fontWeight: '500' }}>
+                      {row.delta === 0 ? '→ 0' : row.delta > 0 ? `↑ ${row.delta}` : `↓ ${Math.abs(row.delta)}`}
+                    </span>
+                  );
+                default:
+                  return null;
+              }
+            }}
+          />
+          {timelineRows.length === 0 && (
+            <p style={{ color: 'var(--sc-text-muted)', fontSize: '13px', padding: '24px', textAlign: 'center' }}>No scans recorded yet.</p>
+          )}
+        </DashboardCard>
+      </section>
+    </DashboardShell>
   );
 }
