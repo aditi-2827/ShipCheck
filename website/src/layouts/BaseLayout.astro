@@ -8,19 +8,17 @@ import '../styles/global.css';
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width" />
     <meta name="generator" content={Astro.generator} />
-    <title>ShipCheck — Know what's broken before you ship</title>
+    <title>ShipCheck ï¿½ Know what's broken before you ship</title>
     <meta name="description" content="ShipCheck scans your repo for security, build, tests, and deployment readiness. Local-first, no external APIs." />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <script type="module">
+      import { createIcons, Settings, PackageCheck, ShieldCheck, Code2, KeyRound, GitBranch } from 'https://unpkg.com/lucide@latest/dist/esm/lucide.js';
+      createIcons({ icons: { Settings, PackageCheck, ShieldCheck, Code2, KeyRound, GitBranch } });
+    </script>
   </head>
   <body>
     <slot />
-    <script>
-      if (typeof lucide !== 'undefined') {
-        lucide.createIcons();
-      }
-    </script>
   </body>
 </html>
