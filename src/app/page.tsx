@@ -210,9 +210,9 @@ export default function Home() {
           <div style={{ display: 'flex', gap: '8px' }}>
             {[
               { key: 'all', label: 'ALL', count: scanIssues.length },
-              { key: 'critical', label: 'CRITICAL', count: criticalCount },
-              { key: 'warning', label: 'WARNING', count: warningCount },
-              { key: 'info', label: 'INFO', count: infoCount },
+              { key: 'critical', label: 'CRITICAL', count: counts.critical },
+              { key: 'warning', label: 'WARNING', count: counts.warning },
+              { key: 'info', label: 'INFO', count: counts.info },
             ].map(function (item) {
               return (
                 <FilterChip
