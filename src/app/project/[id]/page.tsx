@@ -2,21 +2,19 @@
 
 import { useEffect, useState } from 'react';
 import { getProject, initAuth, updateProjectDeployUrl, ClientApiError } from '@/lib/api';
-import type { Issue, IssueGroup, Project, ScanResult } from '@/lib/types';
+import type { Project, ScanResult } from '@/lib/types';
 import {
   DashboardShell,
   DashboardCard,
   Marker,
   Badge,
   Button,
-  Table,
   FilterChip,
   IssueGroupCard,
 } from '@/components/ui';
 import {
   formatTime,
   timeAgo,
-  statusColor,
   statusLabel,
   readinessLabel,
   categoryName,
