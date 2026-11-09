@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getProject, initAuth, updateProjectDeployUrl, ClientApiError } from '@/lib/api';
-import type { Issue, Project, ScanResult } from '@/lib/types';
+import type { Issue, IssueGroup, Project, ScanResult } from '@/lib/types';
 import {
   DashboardShell,
   DashboardCard,
@@ -11,6 +11,7 @@ import {
   Button,
   Table,
   FilterChip,
+  IssueGroupCard,
 } from '@/components/ui';
 import {
   formatTime,
@@ -19,6 +20,8 @@ import {
   statusLabel,
   readinessLabel,
   categoryName,
+  groupIssues,
+  countIssuesBySeverity,
 } from '@/components/ui/utils';
 
 function ScoreChart({ scans }: { scans: ScanResult[] }) {
@@ -99,6 +102,7 @@ function ScoreChart({ scans }: { scans: ScanResult[] }) {
 
 export default function ProjectDashboard({ params }: { params: { id: string } }) {
   const [filter, setFilter] = useState<'all' | 'critical' | 'warning' | 'info'>('all');
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [project, setProject] = useState<Project | null>(null);
   const [history, setHistory] = useState<ScanResult[]>([]);
   const [selectedScanId, setSelectedScanId] = useState<string | null>(null);
