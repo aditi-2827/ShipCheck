@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getFeed, getHistory, runScan as apiRunScan, initAuth, ClientApiError } from '@/lib/api';
-import type { FeedData, Issue, ScanResult } from '@/lib/types';
+import type { FeedData, Issue, IssueGroup, ScanResult } from '@/lib/types';
 import {
   DashboardShell,
   DashboardCard,
@@ -11,6 +11,7 @@ import {
   Button,
   Table,
   FilterChip,
+  IssueGroupCard,
 } from '@/components/ui';
 import {
   formatTime,
@@ -18,6 +19,9 @@ import {
   statusLabel,
   readinessLabel,
   categoryName,
+  groupIssues,
+  countIssuesBySeverity,
+  filterIssuesBySeverity,
 } from '@/components/ui/utils';
 
 const fallbackStages = ['Discover', 'Config', 'Git', 'Dependencies', 'Tests', 'Build', 'Docker', 'Security', 'Ship'];
@@ -26,6 +30,7 @@ type State = 'pass' | 'warning' | 'critical' | 'running' | 'pending';
 
 export default function Home() {
   const [filter, setFilter] = useState<'all' | 'critical' | 'warning' | 'info'>('all');
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [scanning, setScanning] = useState(false);
   const [feed, setFeed] = useState<FeedData | null>(null);
   const [result, setResult] = useState<ScanResult | null>(null);
@@ -80,10 +85,20 @@ export default function Home() {
     : (feed?.categories ?? []).map((c) => ({ slug: c.slug, name: c.name, status: 'pending' as State, score: '—' }));
 
   const scanIssues = result?.issues ?? [];
-  const criticalCount = scanIssues.filter((i) => i.severity === 'critical').length;
-  const warningCount = scanIssues.filter((i) => i.severity === 'warning').length;
-  const infoCount = scanIssues.filter((i) => i.severity === 'info').length;
-  const shownIssues = filter === 'all' ? scanIssues : scanIssues.filter((issue) => issue.severity === filter);
+  const counts = countIssuesBySeverity(scanIssues);
+  const allGroups = groupIssues(scanIssues);
+  const shownGroups = filter === 'all' ? allGroups : allGroups.filter(function (g) { return g.severity === filter; });
+
+  const toggleGroup = function (id: string) {
+    setExpandedGroups(function (prev) {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const isExpanded = function (id: string) { return expandedGroups.has(id); };
 
   const readyLabel = readinessLabel(result?.status ?? null);
   const score = result ? result.score : null;
