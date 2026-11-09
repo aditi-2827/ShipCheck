@@ -177,7 +177,7 @@ export default function Home() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--sc-surface-hover)', border: '1px solid var(--sc-border)', borderRadius: '6px' }}>
               <span style={{ fontSize: '13px', color: 'var(--sc-text-secondary)' }}>Blockers</span>
-              <Badge status="critical">{criticalCount}</Badge>
+              <Badge status="critical">{counts.critical}</Badge>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--sc-surface-hover)', border: '1px solid var(--sc-border)', borderRadius: '6px' }}>
               <span style={{ fontSize: '13px', color: 'var(--sc-text-secondary)' }}>Last scan</span>
