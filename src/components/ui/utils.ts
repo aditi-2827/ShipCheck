@@ -1,4 +1,4 @@
-import type { Issue, IssueGroup } from '@/lib/types';
+import type { Issue, IssueGroup, IssueOccurrence, Severity } from '@/lib/types';
 
 export function formatTime(iso: string): string {
   const d = new Date(iso);
