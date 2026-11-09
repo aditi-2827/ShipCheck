@@ -7,3 +7,4 @@ export { Badge } from './badge';
 export { Button } from './button';
 export { Table } from './table';
 export { FilterChip } from './filter-chip';
+export { IssueGroupCard } from './issue-group-card';
