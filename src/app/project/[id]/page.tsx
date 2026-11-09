@@ -171,10 +171,20 @@ export default function ProjectDashboard({ params }: { params: { id: string } })
   const deltaText = scoreDelta !== null && scoreDelta > 0 ? '↑ +' + scoreDelta : scoreDelta !== null && scoreDelta < 0 ? '↓ ' + Math.abs(scoreDelta) : '→ 0';
 
   const scanIssues = activeScan?.issues ?? [];
-  const criticalCount = scanIssues.filter(function (i) { return i.severity === 'critical'; }).length;
-  const warningCount = scanIssues.filter(function (i) { return i.severity === 'warning'; }).length;
-  const infoCount = scanIssues.filter(function (i) { return i.severity === 'info'; }).length;
-  const shownIssues = filter === 'all' ? scanIssues : scanIssues.filter(function (issue) { return issue.severity === filter; });
+  const counts = countIssuesBySeverity(scanIssues);
+  const allGroups = groupIssues(scanIssues);
+  const shownGroups = filter === 'all' ? allGroups : allGroups.filter(function (g) { return g.severity === filter; });
+
+  const toggleGroup = function (id: string) {
+    setExpandedGroups(function (prev) {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const isExpanded = function (id: string) { return expandedGroups.has(id); };
 
   const projectName = project?.name || params.id;
   const topbarActions = (
@@ -422,9 +432,9 @@ export default function ProjectDashboard({ params }: { params: { id: string } })
               <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
                 {[
                   { key: 'all', label: 'ALL', count: scanIssues.length },
-                  { key: 'critical', label: 'CRITICAL', count: criticalCount },
-                  { key: 'warning', label: 'WARNING', count: warningCount },
-                  { key: 'info', label: 'INFO', count: infoCount },
+                  { key: 'critical', label: 'CRITICAL', count: counts.critical },
+                  { key: 'warning', label: 'WARNING', count: counts.warning },
+                  { key: 'info', label: 'INFO', count: counts.info },
                 ].map(function (item) {
                   return (
                     <FilterChip
@@ -437,45 +447,22 @@ export default function ProjectDashboard({ params }: { params: { id: string } })
                   );
                 })}
               </div>
-              <Table<Issue>
-                columns={[
-                  { key: 'severity', label: 'SEVERITY', align: 'left' },
-                  { key: 'title', label: 'ISSUE', align: 'left' },
-                  { key: 'file', label: 'FILE', align: 'left' },
-                  { key: 'fix', label: 'RECOMMENDATION', align: 'left' },
-                ]}
-                data={shownIssues}
-                rowKey={function (i: Issue) { return i.title; }}
-                renderCell={function (issue: Issue, column) {
-                  switch (column.key) {
-                    case 'severity': {
-                      const sev = issue.severity as 'pass' | 'warning' | 'critical' | 'running' | 'pending';
-                      return (
-                        <span style={{ color: statusColor(sev), fontWeight: '600', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase' }}>
-                          {issue.severity.toUpperCase()}
-                        </span>
-                      );
-                    }
-                    case 'title':
-                      return <span style={{ fontSize: '13px', color: 'var(--sc-text-primary)' }}>{issue.title}</span>;
-                    case 'file':
-                      return (
-                        <span style={{ fontSize: '12px', color: 'var(--sc-text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>
-                          {issue.file}{issue.line ? ':' + issue.line : ''}
-                        </span>
-                      );
-                    case 'fix':
-                      return (
-                        <span style={{ fontSize: '12px', color: 'var(--sc-text-secondary)', fontFamily: 'JetBrains Mono, monospace' }}>{issue.fix}</span>
-                      );
-                    default:
-                      return null;
-                  }
-                }}
-              />
-              {shownIssues.length === 0 && (
+              {shownGroups.length === 0 && (
                 <p style={{ color: 'var(--sc-text-muted)', fontSize: '13px', padding: '24px', textAlign: 'center' }}>No issues found in selected scan.</p>
               )}
+              {shownGroups.map(function (group) {
+                return (
+                  <IssueGroupCard
+                    key={group.id}
+                    group={group}
+                    expanded={isExpanded(group.id)}
+                    onToggle={function () { toggleGroup(group.id); }}
+                  />
+                );
+              })}
+              <div style={{ fontSize: '11px', color: 'var(--sc-text-muted)', fontFamily: 'JetBrains Mono, monospace', paddingTop: '12px', borderTop: '1px solid var(--sc-border)' }}>
+                {shownGroups.length} unique issue group{shownGroups.length !== 1 ? 's' : ''} • {scanIssues.length} total finding{scanIssues.length !== 1 ? 's' : ''}
+              </div>
             </DashboardCard>
           </section>
         </div>
