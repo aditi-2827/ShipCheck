@@ -227,43 +227,22 @@ export default function Home() {
           </div>
         </div>
         <DashboardCard>
-          <Table<Issue>
-            columns={[
-              { key: 'severity', label: 'SEVERITY', align: 'left' },
-              { key: 'title', label: 'ISSUE', align: 'left' },
-              { key: 'file', label: 'FILE', align: 'left' },
-              { key: 'status', label: 'STATUS', align: 'left' },
-            ]}
-            data={shownIssues}
-            rowKey={(i: Issue) => i.title}
-            renderCell={(issue: Issue, column) => {
-              switch (column.key) {
-                case 'severity': {
-                  const sev = issue.severity as 'pass' | 'warning' | 'critical' | 'running' | 'pending';
-                  return (
-                    <span style={{ color: statusColor(sev), fontWeight: '600', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase' }}>
-                      {issue.severity.toUpperCase()}
-                    </span>
-                  );
-                }
-                case 'title':
-                  return <span style={{ fontSize: '13px', color: 'var(--sc-text-primary)' }}>{issue.title}</span>;
-                case 'file':
-                  return (
-                    <span style={{ fontSize: '12px', color: 'var(--sc-text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>
-                      {issue.file}{issue.line ? `:${issue.line}` : ''}
-                    </span>
-                  );
-                case 'status':
-                  return <span style={{ fontSize: '11px', color: 'var(--sc-text-secondary)', fontFamily: 'JetBrains Mono, monospace' }}>Open</span>;
-                default:
-                  return null;
-              }
-            }}
-          />
-          {shownIssues.length === 0 && (
+          {shownGroups.length === 0 && (
             <p style={{ color: 'var(--sc-text-muted)', fontSize: '13px', padding: '24px', textAlign: 'center' }}>No issues found.</p>
           )}
+          {shownGroups.map(function (group) {
+            return (
+              <IssueGroupCard
+                key={group.id}
+                group={group}
+                expanded={isExpanded(group.id)}
+                onToggle={function () { toggleGroup(group.id); }}
+              />
+            );
+          })}
+          <div style={{ fontSize: '11px', color: 'var(--sc-text-muted)', fontFamily: 'JetBrains Mono, monospace', paddingTop: '12px', borderTop: '1px solid var(--sc-border)' }}>
+            {shownGroups.length} unique issue group{shownGroups.length !== 1 ? 's' : ''} • {scanIssues.length} total finding{scanIssues.length !== 1 ? 's' : ''}
+          </div>
         </DashboardCard>
       </section>
 
