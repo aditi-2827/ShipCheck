@@ -175,7 +175,7 @@ export default function Home() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--sc-surface-hover)', border: '1px solid var(--sc-border)', borderRadius: '6px', marginBottom: '8px' }}>
               <span style={{ fontSize: '13px', color: 'var(--sc-text-secondary)' }}>Warnings</span>
-              <Badge status="warning">{warningCount}</Badge>
+              <Badge status="warning">{counts.warning}</Badge>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--sc-surface-hover)', border: '1px solid var(--sc-border)', borderRadius: '6px' }}>
               <span style={{ fontSize: '13px', color: 'var(--sc-text-secondary)' }}>Blockers</span>
