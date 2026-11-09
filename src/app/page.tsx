@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getFeed, getHistory, runScan as apiRunScan, initAuth, ClientApiError } from '@/lib/api';
-import type { FeedData, Issue, IssueGroup, ScanResult } from '@/lib/types';
+import type { FeedData, ScanResult } from '@/lib/types';
 import {
   DashboardShell,
   DashboardCard,
@@ -15,13 +15,11 @@ import {
 } from '@/components/ui';
 import {
   formatTime,
-  statusColor,
   statusLabel,
   readinessLabel,
   categoryName,
   groupIssues,
   countIssuesBySeverity,
-  filterIssuesBySeverity,
 } from '@/components/ui/utils';
 
 const fallbackStages = ['Discover', 'Config', 'Git', 'Dependencies', 'Tests', 'Build', 'Docker', 'Security', 'Ship'];
