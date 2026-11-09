@@ -10,6 +10,21 @@ export interface Issue {
   fix: string;
 }
 
+export interface IssueOccurrence {
+  file: string | null;
+  line: number | null;
+}
+
+export interface IssueGroup {
+  id: string;
+  title: string;
+  severity: Severity;
+  message: string;
+  fix: string;
+  count: number;
+  occurrences: IssueOccurrence[];
+}
+
 export interface CategoryResult {
   slug: string;
   name: string;
