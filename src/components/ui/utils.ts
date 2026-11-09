@@ -1,3 +1,5 @@
+import type { Issue, IssueGroup } from '@/lib/types';
+
 export function formatTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
@@ -65,4 +67,53 @@ export function categoryName(slug: string): string {
     environment: 'Environment',
   };
   return map[slug] || slug;
+}
+
+export function groupIssues(issues: Issue[]): IssueGroup[] {
+  const groupsMap: Map<string, IssueGroup> = new Map();
+
+  for (const issue of issues) {
+    const key = `${issue.severity}|${issue.title}|${issue.message}|${issue.fix}`;
+    const occurrence: IssueOccurrence = { file: issue.file, line: issue.line };
+
+    if (groupsMap.has(key)) {
+      const group = groupsMap.get(key)!;
+      group.count += 1;
+      group.occurrences.push(occurrence);
+    } else {
+      groupsMap.set(key, {
+        id: key,
+        title: issue.title,
+        severity: issue.severity,
+        message: issue.message,
+        fix: issue.fix,
+        count: 1,
+        occurrences: [occurrence],
+      });
+    }
+  }
+
+  const groups = Array.from(groupsMap.values());
+  groups.sort(function (a, b) {
+    const sevOrder: Record<Severity, number> = { critical: 0, warning: 1, info: 2 };
+    const aSev = sevOrder[a.severity];
+    const bSev = sevOrder[b.severity];
+    if (aSev !== bSev) return aSev - bSev;
+    return b.count - a.count;
+  });
+
+  return groups;
+}
+
+export function filterIssuesBySeverity(issues: Issue[], filter: 'all' | 'critical' | 'warning' | 'info'): Issue[] {
+  if (filter === 'all') return issues;
+  return issues.filter(function (issue) { return issue.severity === filter; });
+}
+
+export function countIssuesBySeverity(issues: Issue[]): { critical: number; warning: number; info: number } {
+  return {
+    critical: issues.filter(function (i) { return i.severity === 'critical'; }).length,
+    warning: issues.filter(function (i) { return i.severity === 'warning'; }).length,
+    info: issues.filter(function (i) { return i.severity === 'info'; }).length,
+  };
 }
