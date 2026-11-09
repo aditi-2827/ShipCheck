@@ -2,7 +2,6 @@
 
 import type { IssueGroup } from '@/lib/types';
 import { Marker } from './marker';
-import { Badge } from './badge';
 import { statusColor } from './utils';
 
 interface IssueGroupCardProps {
