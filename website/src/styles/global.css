@@ -575,7 +575,327 @@ footer {
   color: var(--text-secondary);
 }
 
+/* Hero card overflow protection */
+.hero-card-wrap {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.hero-card {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.score-detail {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+/* Feature cards - equal height */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.feature-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 220px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.feature-card > * {
+  flex-shrink: 0;
+}
+
+.feature-card p {
+  flex-grow: 1;
+}
+
+/* Steps - step command styling */
+.step-command {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--surface-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.step-prompt {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* Terminal diagram */
+.terminal-diagram {
+  margin-top: 40px;
+  padding: 24px;
+  background: var(--surface-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.diagram-line {
+  text-align: center;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.diagram-connector {
+  text-align: center;
+  margin: 6px 0;
+}
+
+.diagram-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 4px 0;
+}
+
+.diagram-branch {
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.diagram-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 8px;
+}
+
+.diagram-cmd {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.diagram-note {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* Terminal cards - documentation section */
+.terminal-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  margin-top: 24px;
+}
+
+.terminal-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+}
+
+.terminal-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-secondary);
+}
+
+.terminal-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--primary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 4px 10px;
+  background: rgba(79, 70, 229, 0.08);
+  border: 1px solid rgba(79, 70, 229, 0.2);
+  border-radius: 6px;
+}
+
+.terminal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.terminal-desc {
+  margin: 0;
+  padding: 0 24px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.terminal-code-block {
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.terminal-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  font-size: 13px;
+}
+
+.code-label {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.code-body {
+  margin: 0;
+  padding: 16px 24px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre;
+  background: transparent;
+}
+
+.code-note {
+  margin: 0;
+  padding: 8px 24px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  border-bottom: 1px solid var(--border);
+}
+
+.terminal-output {
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.output-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 12px 24px 4px 24px;
+}
+
+.example-note {
+  border-bottom: none;
+  padding-bottom: 16px;
+}
+
+.terminal-note {
+  margin: 0;
+  padding: 16px 24px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  border-top: 1px solid var(--border);
+  background: var(--surface-secondary);
+}
+
+/* Global install section */
+.global-install {
+  margin-top: 32px;
+  padding: 24px;
+  background: var(--surface-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.global-install h3 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.global-install p {
+  margin: 0 0 16px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.global-install .terminal-code-block {
+  margin-bottom: 12px;
+  border-bottom: none;
+}
+
+.global-install .terminal-code-block.compact {
+  margin-bottom: 8px;
+}
+
+.global-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.setup-footer {
+  margin-top: 24px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* Copy button states */
+.copy-btn.copied {
+  background: var(--primary);
+  color: #FFFFFF;
+  border-color: var(--primary);
+}
+
+/* Responsive */
 @media (max-width: 1024px) {
+  .terminal-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .terminal-diagram {
+    font-size: 12px;
+    padding: 16px;
+  }
+
+  .diagram-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .diagram-col {
+    padding: 0;
+  }
+}
+
+@media (max-width: 768px) {
   .hero-grid {
     grid-template-columns: 1fr;
   }
@@ -583,7 +903,31 @@ footer {
   .feature-grid,
   .steps-grid,
   .privacy-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+  }
+
+  .status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .footer-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .footer-links {
+    justify-content: flex-start;
+  }
+
+  .section-header h2 {
+    font-size: 26px;
+  }
+
+  .terminal-card {
+    border-radius: 12px;
+  }
+
+  .global-install {
+    padding: 20px;
   }
 }
 
