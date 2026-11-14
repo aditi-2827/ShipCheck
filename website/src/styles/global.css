@@ -819,26 +819,12 @@ footer {
   color: #FFFFFF;
   border-color: var(--primary);
 }
-
 /* Responsive */
 @media (max-width: 1024px) {
   .terminal-cards {
     grid-template-columns: 1fr;
   }
 
-  .terminal-diagram {
-    font-size: 12px;
-    padding: 16px;
-  }
-
-  .diagram-row {
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .diagram-col {
-    padding: 0;
-  }
 }
 
 @media (max-width: 768px) {
