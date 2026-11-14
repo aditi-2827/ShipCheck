@@ -641,61 +641,6 @@ footer {
   font-size: 13px;
 }
 
-/* Terminal diagram */
-.terminal-diagram {
-  margin-top: 40px;
-  padding: 24px;
-  background: var(--surface-secondary);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.diagram-line {
-  text-align: center;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 8px;
-}
-
-.diagram-connector {
-  text-align: center;
-  margin: 6px 0;
-}
-
-.diagram-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  margin: 4px 0;
-}
-
-.diagram-branch {
-  text-align: center;
-  color: var(--text-secondary);
-}
-
-.diagram-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 0 8px;
-}
-
-.diagram-cmd {
-  color: var(--text-primary);
-  font-size: 13px;
-}
-
-.diagram-note {
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-style: italic;
-}
-
 /* Terminal cards - documentation section */
 .terminal-cards {
   display: grid;
