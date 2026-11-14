@@ -178,6 +178,49 @@ import BaseLayout from '../layouts/BaseLayout.astro';
       </div>
     </section>
 
+    <section id="how-it-works">
+      <div class="container">
+        <div class="section-header">
+          <h2>How It Works</h2>
+          <p>ShipCheck uses two terminals: one runs the local server, the other initialises and scans your project.</p>
+        </div>
+        <div class="steps-grid">
+          <article class="step-card">
+            <div class="step-indicator">
+              <span class="step-number">01</span>
+              <div class="step-line"></div>
+            </div>
+            <h3>Start the local server</h3>
+            <p>Open your project directory in a terminal and start the ShipCheck server. Keep this terminal running while you use the CLI — it hosts the local dashboard and prints its URL.</p>
+            <div class="step-command">
+              <span class="step-prompt">&gt;</span> npx shipcheck-cli07 server
+            </div>
+          </article>
+          <article class="step-card">
+            <div class="step-indicator">
+              <span class="step-number">02</span>
+              <div class="step-line"></div>
+            </div>
+            <h3>Initialise your project</h3>
+            <p>Without closing the server terminal, open a <strong>new</strong> terminal window or tab. Navigate to the <strong>same</strong> project directory and initialise ShipCheck with the running server.</p>
+            <div class="step-command">
+              <span class="step-prompt">&gt;</span> npx shipcheck-cli07 init
+            </div>
+          </article>
+          <article class="step-card">
+            <div class="step-indicator">
+              <span class="step-number">03</span>
+            </div>
+            <h3>Run the scan</h3>
+            <p>Continue in the second terminal. Run the scan to analyse your repository locally. Open the dashboard URL printed in the terminal to review your Ship Score and findings.</p>
+            <div class="step-command">
+              <span class="step-prompt">&gt;</span> npx shipcheck-cli07 scan
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
     <section>
       <div class="container">
         <div class="section-header">
